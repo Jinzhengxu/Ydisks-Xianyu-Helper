@@ -10739,6 +10739,15 @@ export interface operations {
                     "application/json": components["schemas"]["ItemExternalStockResponse"];
                 };
             };
+            /** @description 请求参数无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description 未认证 */
             401: {
                 headers: {
