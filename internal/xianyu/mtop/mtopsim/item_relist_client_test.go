@@ -135,7 +135,7 @@ func TestEnsureItemOnSaleKeepsExistingListing(t *testing.T) {
 	gateway.SetOnSale(misleading, false)
 	gateway.SetEditStatus(misleading, "1")
 	// listed、err 是必须实际提交编辑的结果。
-	listed, err := client.EnsureItemOnSale(context.Background(), cookie, misleading)
+	listed, err := client.EnsureItemOnSale(context.Background(), cookie, misleading, mtop.EnsureItemOnSaleRequest{})
 	if err != nil || listed.AlreadyOnSale || !listed.Submitted || listed.RawStatus != "1" || listed.PlatformRet == "" {
 		t.Fatalf("itemStatus=1 必须提交编辑: %+v err=%v", listed, err)
 	}
@@ -155,7 +155,7 @@ func TestEnsureItemOnSaleKeepsExistingListing(t *testing.T) {
 	gateway.SetEditStatus(unsupported, "1")
 	gateway.MarkEditUnsupported(unsupported)
 	// refused、refuseErr 是平台拒绝结果。
-	refused, refuseErr := client.EnsureItemOnSale(context.Background(), cookie, unsupported)
+	refused, refuseErr := client.EnsureItemOnSale(context.Background(), cookie, unsupported, mtop.EnsureItemOnSaleRequest{})
 	if refuseErr == nil || !errors.Is(refuseErr, mtop.ErrItemEditUnsupported) || (refused != nil && refused.Submitted) {
 		t.Fatalf("不支持编辑应拒绝而不是成功: %+v err=%v", refused, refuseErr)
 	}
@@ -168,7 +168,7 @@ func TestEnsureItemOnSaleKeepsExistingListing(t *testing.T) {
 	offSale := gateway.AddItemWithStock(sellerID, "待上架商品", "8.80", 3)
 	gateway.SetOnSale(offSale, false)
 	// restored、err 是把原商品改回在售的结果。
-	restored, err := client.EnsureItemOnSale(context.Background(), cookie, offSale)
+	restored, err := client.EnsureItemOnSale(context.Background(), cookie, offSale, mtop.EnsureItemOnSaleRequest{})
 	if err != nil || restored.AlreadyOnSale || restored.RawStatus != "-2" {
 		t.Fatalf("下架商品应重新上架: %+v err=%v", restored, err)
 	}
@@ -180,7 +180,7 @@ func TestEnsureItemOnSaleKeepsExistingListing(t *testing.T) {
 		t.Fatalf("重新上架改动了原详情: %+v quantity=%s", after, offQuantity)
 	}
 	// again 是读回 itemStatus=0 后的再次上架。读数仍不能跳过提交。
-	again, err := client.EnsureItemOnSale(context.Background(), cookie, offSale)
+	again, err := client.EnsureItemOnSale(context.Background(), cookie, offSale, mtop.EnsureItemOnSaleRequest{})
 	// repeated 是第二次提交后的平台商品。
 	repeated, _ := gateway.Item(offSale)
 	if err != nil || again.AlreadyOnSale || !again.Submitted || repeated.EditCount != 2 || repeated.Quantity != 3 {
@@ -191,7 +191,7 @@ func TestEnsureItemOnSaleKeepsExistingListing(t *testing.T) {
 	gateway.SetOnSale(unknown, false)
 	gateway.SetEditStatus(unknown, "9")
 	// attempted、err 是未知状态码的上架结果。
-	attempted, err := client.EnsureItemOnSale(context.Background(), cookie, unknown)
+	attempted, err := client.EnsureItemOnSale(context.Background(), cookie, unknown, mtop.EnsureItemOnSaleRequest{})
 	if err != nil || attempted.AlreadyOnSale || attempted.RawStatus != "9" {
 		t.Fatalf("未知状态码仍应上架: %+v err=%v", attempted, err)
 	}
@@ -199,5 +199,29 @@ func TestEnsureItemOnSaleKeepsExistingListing(t *testing.T) {
 	unknownItem, _ := gateway.Item(unknown)
 	if !unknownItem.OnSale || unknownItem.Quantity != 2 || unknownItem.EditCount != 1 {
 		t.Fatalf("未知状态码上架结果异常: %+v", unknownItem)
+	}
+	// empty 是平台库存为 0、编辑详情状态码仍可能是 1 的下架商品。
+	empty := gateway.AddItemWithStock(sellerID, "零库存", "5.50", 1)
+	gateway.SellOut(empty)
+	gateway.SetEditStatus(empty, "1")
+	// held、holdErr 是不允许改库存时的结果，不能提交也不能报成功。
+	held, holdErr := client.EnsureItemOnSale(context.Background(), cookie, empty, mtop.EnsureItemOnSaleRequest{})
+	if !errors.Is(holdErr, mtop.ErrItemRelistZeroQuantity) || held == nil || held.Submitted || held.StockAdjusted || held.ReadQuantity != 0 {
+		t.Fatalf("零库存且未同步时不能上架: %+v err=%v", held, holdErr)
+	}
+	// emptyItem 是零库存商品，必须仍下架且库存仍为 0。
+	emptyItem, _ := gateway.Item(empty)
+	if emptyItem.OnSale || emptyItem.Quantity != 0 || emptyItem.EditCount != 0 {
+		t.Fatalf("零库存商品被改动: %+v", emptyItem)
+	}
+	// adjusted、adjustErr 是明确允许把库存写成 1 的结果。
+	adjusted, adjustErr := client.EnsureItemOnSale(context.Background(), cookie, empty, mtop.EnsureItemOnSaleRequest{SyncQuantity: true, Quantity: 1})
+	if adjustErr != nil || !adjusted.Submitted || !adjusted.StockAdjusted || adjusted.ReadQuantity != 0 || adjusted.WrittenQuantity != 1 {
+		t.Fatalf("显式同步应写明库存从 0 改为 1: %+v err=%v", adjusted, adjustErr)
+	}
+	// adjustedItem 是写入库存后的商品。
+	adjustedItem, _ := gateway.Item(empty)
+	if !adjustedItem.OnSale || adjustedItem.Quantity != 1 || adjustedItem.Price != "5.50" || adjustedItem.EditCount != 1 {
+		t.Fatalf("显式同步结果异常: %+v", adjustedItem)
 	}
 }

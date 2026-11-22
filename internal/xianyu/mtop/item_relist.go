@@ -9,6 +9,18 @@ import (
 // ErrItemMultiSpecExternalQuantity 表示不能把一个外部库存数写进多规格商品的每一行。
 var ErrItemMultiSpecExternalQuantity = errors.New("多规格商品不能按单一外部库存改写各规格库存")
 
+// ErrItemRelistZeroQuantity 表示平台库存为 0，且调用方不允许改库存，因此没有提交重新上架。
+// 网页编辑不接受数量小于 1 的上架；账号级自动上架会补 1，外部库存在未开启同步时不能这么做。
+var ErrItemRelistZeroQuantity = errors.New("平台库存为 0，未开启同步平台库存，未提交重新上架")
+
+// EnsureItemOnSaleRequest 决定这次重新上架能否改库存。
+type EnsureItemOnSaleRequest struct {
+	// SyncQuantity 为真时才允许把平台库存改成 Quantity。为假时必须保持读取到的库存。
+	SyncQuantity bool
+	// Quantity 是同步开启时要写入的库存，必须大于 0。
+	Quantity int
+}
+
 // itemStatusOnSale 是 editDetail/edit 中 itemStatus 表示“在售”的取值；下架为 "-2"。
 const itemStatusOnSale = "0"
 
@@ -26,6 +38,12 @@ type ItemRelistResult struct {
 	Submitted bool
 	// PlatformRet 是平台 ret 的首条文本，只保留业务回执，不含 Cookie。
 	PlatformRet string
+	// ReadQuantity 是 editDetail 读到的库存。单规格是顶层数量，多规格是各行合计。
+	ReadQuantity int
+	// StockAdjusted 表示这次提交改写了平台库存。未开启同步时必须为假。
+	StockAdjusted bool
+	// WrittenQuantity 是实际写入的库存。只有 StockAdjusted 为真时有意义。
+	WrittenQuantity int
 	// UpdatedCookies 是请求累计更新后的 Cookie；为空表示没有变化。
 	UpdatedCookies string
 }
@@ -157,10 +175,11 @@ func (c *ClientImpl) RelistItemWithQuantity(ctx context.Context, cookiesStr, ite
 }
 
 // EnsureItemOnSale 对原商品提交一次重新上架。先读 editDetail，再原样回填，只把 itemStatus 写成 "0"。
-// 读取到的 itemStatus（包括 "1"）不能证明闲鱼 App 正在出售，因此一律提交，不把读数当成已在售而跳过。
+// 读取到的 itemStatus（包括 "1"）不能证明闲鱼 App 正在出售，因此有库存时一律提交。
+// 平台库存为 0 时，网页编辑不接受上架。未开启 SyncQuantity 时不把库存改成 1，也不提交，避免假装上架成功。
 // 项目里没有已确认的“已在售”业务回执；平台拒绝、风控或不支持网页编辑时返回错误，不伪装成功。
-// 不发布新商品，不改价格、库存和描述。固定最多两次平台请求，失败不重试。
-func (c *ClientImpl) EnsureItemOnSale(ctx context.Context, cookiesStr, itemID string) (*ItemRelistResult, error) {
+// 不发布新商品。固定最多两次平台请求，失败不重试。
+func (c *ClientImpl) EnsureItemOnSale(ctx context.Context, cookiesStr, itemID string, request EnsureItemOnSaleRequest) (*ItemRelistResult, error) {
 	// id 是规范化后的原商品 ID，不会另建商品。
 	id := strings.TrimSpace(itemID)
 	if id == "" {
@@ -174,14 +193,28 @@ func (c *ClientImpl) EnsureItemOnSale(ctx context.Context, cookiesStr, itemID st
 	if detail.ItemID != id {
 		return nil, ErrItemEditDetailUnusable
 	}
-	// result 带回原始状态码。此时还没有提交，不能当成上架成功。
-	result := &ItemRelistResult{ItemID: id, UpdatedCookies: detail.UpdatedCookies, RawStatus: strings.TrimSpace(detail.Status)}
+	// result 带回原始状态码和读取到的库存。此时还没有提交，不能当成上架成功。
+	result := &ItemRelistResult{ItemID: id, UpdatedCookies: detail.UpdatedCookies, RawStatus: strings.TrimSpace(detail.Status), ReadQuantity: detail.Quantity}
+	if detail.Quantity <= 0 && !request.SyncQuantity {
+		return result, ErrItemRelistZeroQuantity
+	}
+	if request.SyncQuantity && detail.MultiSpec {
+		return result, ErrItemMultiSpecExternalQuantity
+	}
+	if request.SyncQuantity && (request.Quantity < 1 || request.Quantity > itemStockMax) {
+		return result, ErrItemStockInvalid
+	}
 	// payload 是原详情的全量副本，随后只改提交用的在售状态值。
 	payload, err := cloneItemEditPayload(detail, id)
 	if err != nil {
 		return result, err
 	}
 	payload["itemStatus"] = itemStatusOnSale
+	if request.SyncQuantity && detail.Quantity != request.Quantity {
+		payload["quantity"] = typedLike(detail.raw["quantity"], request.Quantity)
+		result.StockAdjusted = true
+		result.WrittenQuantity = request.Quantity
+	}
 	// ret 是平台接受本次编辑后的首条回执；cookies 是提交后累计更新的 Cookie。
 	ret, _, cookies, err := c.submitItemEdit(ctx, cookiesStr, detail, id, payload)
 	if cookies != "" {
@@ -197,8 +230,8 @@ func (c *ClientImpl) EnsureItemOnSale(ctx context.Context, cookiesStr, itemID st
 
 // ItemEnsureOnSaleClient 是外部库存把原商品置于在售的可选能力，避免扩大所有客户端替身。
 type ItemEnsureOnSaleClient interface {
-	// EnsureItemOnSale 提交一次原商品重新上架。itemStatus 读数不会跳过提交。
-	EnsureItemOnSale(ctx context.Context, cookiesStr, itemID string) (*ItemRelistResult, error)
+	// EnsureItemOnSale 提交一次原商品重新上架。itemStatus 读数不会跳过提交；库存为 0 且不允许改库存时不提交。
+	EnsureItemOnSale(ctx context.Context, cookiesStr, itemID string, request EnsureItemOnSaleRequest) (*ItemRelistResult, error)
 }
 
 // 确保真实客户端实现外部库存的幂等上架。

@@ -12028,7 +12028,9 @@ components:
         listing_state: {type: string, description: 读取的 itemStatus 不能证明在售。没有明确平台回执时为 unverified。}
         platform_outcome: {type: string, description: submitted 表示平台接受了本次编辑；refused 表示平台拒绝；dry_run 表示没有提交；skipped 表示同一天相同库存跳过。}
         read_item_status: {type: string, description: editDetail 读到的原始 itemStatus。1 不能证明商品正在出售。}
-        platform_ret: {type: string, description: 平台 ret 或拒绝码的脱敏文本，不含 Cookie。}
+        read_quantity: {type: integer, description: editDetail 读到的平台库存。库存接口 GET /stock 只返回 quantity，不返回 itemStatus。}
+        stock_adjusted: {type: boolean, description: 为真表示这次提交按已开启的同步平台库存改写了数量。为假表示没有改库存。}
+        platform_ret: {type: string, description: 平台 ret 或拒绝码的脱敏文本，不含 Cookie。QUANTITY_ZERO_NOT_ADJUSTED 表示库存为 0 且未改库存，因此没有提交。}
         config:
           $ref: '#/components/schemas/ItemExternalStockResponse'
     ItemStockUpdateResponse:

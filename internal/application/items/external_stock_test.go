@@ -170,7 +170,7 @@ func (platform *externalStockPlatformFake) Unpublish(context.Context, int64, str
 }
 
 // Relist 记录重新上架。
-func (platform *externalStockPlatformFake) Relist(context.Context, int64, string, string) (ExternalStockApplyResult, error) {
+func (platform *externalStockPlatformFake) Relist(context.Context, int64, string, string, int, bool) (ExternalStockApplyResult, error) {
 	platform.mu.Lock()
 	defer platform.mu.Unlock()
 	platform.relists++

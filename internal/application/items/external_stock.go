@@ -105,6 +105,10 @@ type ExternalStockCheckResult struct {
 	PlatformOutcome string
 	// ReadItemStatus 是 editDetail 读到的原始 itemStatus。
 	ReadItemStatus string
+	// ReadQuantity 是 editDetail 读到的平台库存。
+	ReadQuantity int
+	// StockAdjusted 表示这次提交改写了平台库存。
+	StockAdjusted bool
 	// PlatformRet 是平台接受或拒绝的脱敏回执。
 	PlatformRet string
 }
@@ -165,6 +169,10 @@ type ExternalStockApplyResult struct {
 	Outcome string
 	// ReadItemStatus 是 editDetail 读到的原始 itemStatus，不能证明 App 是否在售。
 	ReadItemStatus string
+	// ReadQuantity 是 editDetail 读到的平台库存。
+	ReadQuantity int
+	// StockAdjusted 表示这次提交改写了平台库存。
+	StockAdjusted bool
 	// PlatformRet 是平台 ret 或拒绝码的脱敏文本。
 	PlatformRet string
 }
@@ -175,8 +183,8 @@ type ExternalStockPlatform interface {
 	Inspect(context.Context, int64, string, string) (ListingSnapshot, error)
 	// Unpublish 下架原商品。商品已经不在售时返回成功。
 	Unpublish(context.Context, int64, string, string) (ExternalStockApplyResult, error)
-	// Relist 重新上架同一个原商品。读取的 itemStatus 不会跳过提交。
-	Relist(context.Context, int64, string, string) (ExternalStockApplyResult, error)
+	// Relist 重新上架同一个原商品。sync 为假时不改库存；平台库存为 0 时因此不提交。
+	Relist(context.Context, int64, string, string, int, bool) (ExternalStockApplyResult, error)
 	// SyncStock 保留给端口兼容；外部库存的目标状态动作不会改写平台库存。
 	SyncStock(context.Context, int64, string, string, int) error
 }
@@ -559,6 +567,14 @@ func (service *ExternalStockService) checkLocked(ctx context.Context, cookieID, 
 	return service.finish(ctx, config, ExternalStockCheckResult{Available: &count}, decision, options)
 }
 
+// availableFromResult 返回本次外部可用库存；没有读数时为 0。
+func availableFromResult(result ExternalStockCheckResult) int {
+	if result.Available == nil {
+		return 0
+	}
+	return *result.Available
+}
+
 // annotateListingReason 把脱敏诊断附在状态说明后面，方便下一次检查直接看到来源。
 func annotateListingReason(reason, diagnostic string) string {
 	if diagnostic == "" {
@@ -617,20 +633,27 @@ func (service *ExternalStockService) finish(ctx context.Context, config External
 	case ExternalStockActionUnpublish:
 		applied, actionErr = service.platform.Unpublish(ctx, userID, config.CookieID, config.ItemID)
 	case ExternalStockActionRelist:
-		applied, actionErr = service.platform.Relist(ctx, userID, config.CookieID, config.ItemID)
+		// target 是同步开启时要写入的库存，不超过配置上限。未开启同步时平台不会使用它。
+		target := availableFromResult(result)
+		if config.StockCap > 0 && target > config.StockCap {
+			target = config.StockCap
+		}
+		applied, actionErr = service.platform.Relist(ctx, userID, config.CookieID, config.ItemID, target, config.SyncPlatformStock)
 	default:
 		actionErr = ErrExternalStockUnknownState
 	}
 	if actionErr != nil {
 		// class 是写操作失败后的退避类别。在售状态未知不会进入这里。
 		class := ExternalStockBackoffAll
-		if errors.Is(actionErr, ErrExternalStockEditUnsupported) || errors.Is(actionErr, ErrExternalStockMultiSpec) {
+		if errors.Is(actionErr, ErrExternalStockEditUnsupported) || errors.Is(actionErr, ErrExternalStockMultiSpec) || errors.Is(actionErr, ErrExternalStockZeroQuantity) {
 			class = ExternalStockBackoffRelist
 		}
 		result.Action = ExternalStockActionStop
 		result.Status = "backed_off"
 		result.PlatformOutcome = "refused"
 		result.ReadItemStatus = applied.ReadItemStatus
+		result.ReadQuantity = applied.ReadQuantity
+		result.StockAdjusted = applied.StockAdjusted
 		result.PlatformRet = applied.PlatformRet
 		result.ListingState = "unverified"
 		result.Message = annotateListingReason(safeExternalStockError(actionErr), applied.Diagnostic)
@@ -641,6 +664,8 @@ func (service *ExternalStockService) finish(ctx context.Context, config External
 	result.ListingState = applied.ListingState
 	result.PlatformOutcome = applied.Outcome
 	result.ReadItemStatus = applied.ReadItemStatus
+	result.ReadQuantity = applied.ReadQuantity
+	result.StockAdjusted = applied.StockAdjusted
 	result.PlatformRet = applied.PlatformRet
 	result.Message = annotateListingReason(decision.Reason, applied.Diagnostic)
 	service.logger.InfoContext(ctx, "外部库存已同步商品状态", "account", config.CookieID, "item_id", config.ItemID, "trigger", options.Trigger, "action", decision.Action, "noop", applied.Noop)

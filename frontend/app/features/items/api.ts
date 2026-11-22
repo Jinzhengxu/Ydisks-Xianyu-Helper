@@ -215,6 +215,8 @@ export const checkItemExternalStock = async (cookieId: string, itemId: string, m
     listingState: response.listing_state,
     platformOutcome: response.platform_outcome ?? '',
     readItemStatus: response.read_item_status ?? '',
+    readQuantity: response.read_quantity ?? 0,
+    stockAdjusted: response.stock_adjusted ?? false,
     platformRet: response.platform_ret ?? '',
     config: externalStockFromResponse(response.config),
   };

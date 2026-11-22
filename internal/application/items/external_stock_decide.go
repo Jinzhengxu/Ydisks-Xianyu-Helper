@@ -98,6 +98,8 @@ var (
 	ErrExternalStockUnknownState = errors.New("无法确认商品在售状态，已停止外部库存同步")
 	// ErrExternalStockMultiSpec 表示多规格商品不能把一个外部库存数写进每一行规格。
 	ErrExternalStockMultiSpec = errors.New("多规格商品暂不能按外部库存改写各规格库存")
+	// ErrExternalStockZeroQuantity 表示平台库存为 0，且未开启同步，因此没有提交重新上架。
+	ErrExternalStockZeroQuantity = errors.New("平台库存为 0，未开启同步平台库存，未提交重新上架")
 )
 
 // ListingSnapshot 是一次在售状态读取的结果，可以来自网页编辑详情或本地同步记录。

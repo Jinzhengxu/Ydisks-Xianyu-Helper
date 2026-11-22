@@ -198,6 +198,10 @@ export interface ExternalStockCheckResult {
   platformOutcome: string;
   /** editDetail 读到的原始 itemStatus。 */
   readItemStatus: string;
+  /** editDetail 读到的平台库存。 */
+  readQuantity: number;
+  /** 这次提交是否改写了平台库存。 */
+  stockAdjusted: boolean;
   /** 脱敏后的平台回执。 */
   platformRet: string;
   /** 检查后的配置。 */

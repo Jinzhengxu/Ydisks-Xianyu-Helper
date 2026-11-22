@@ -134,6 +134,10 @@ type externalStockCheckResponse struct {
 	PlatformOutcome string `json:"platform_outcome"`
 	// ReadItemStatus 是 editDetail 读到的原始 itemStatus，不能证明 App 是否在售。
 	ReadItemStatus string `json:"read_item_status"`
+	// ReadQuantity 是 editDetail 读到的平台库存。
+	ReadQuantity int `json:"read_quantity"`
+	// StockAdjusted 表示这次提交是否改写了平台库存。
+	StockAdjusted bool `json:"stock_adjusted"`
 	// PlatformRet 是平台接受或拒绝的脱敏回执。
 	PlatformRet string `json:"platform_ret"`
 	// Config 是检查后的最新非秘密配置。
@@ -249,7 +253,8 @@ func (s *Server) checkItemExternalStock(w http.ResponseWriter, r *http.Request) 
 	writeExternalStockJSON(w, http.StatusOK, externalStockCheckResponse{
 		Action: result.Action, Status: result.Status, Available: result.Available, Message: result.Message,
 		DryRun: result.DryRun, ListingState: result.ListingState, PlatformOutcome: result.PlatformOutcome,
-		ReadItemStatus: result.ReadItemStatus, PlatformRet: result.PlatformRet, Config: externalStockHTTPResponse(config),
+		ReadItemStatus: result.ReadItemStatus, ReadQuantity: result.ReadQuantity, StockAdjusted: result.StockAdjusted,
+		PlatformRet: result.PlatformRet, Config: externalStockHTTPResponse(config),
 	})
 }
 

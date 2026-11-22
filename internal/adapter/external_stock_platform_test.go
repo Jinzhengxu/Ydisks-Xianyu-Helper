@@ -38,14 +38,19 @@ func TestLocalSyncedItemStatusReadsOnlyStatusCode(t *testing.T) {
 // TestExternalStockRelistDiagnosticKeepsStatusCode 验证上架回执只保留状态码，已在售时标记为空操作。
 func TestExternalStockRelistDiagnosticKeepsStatusCode(t *testing.T) {
 	// applied 是真机在售码的回执。
-	applied := externalStockApplyFromRelist(&mtop.ItemRelistResult{RawStatus: "1", Submitted: true, PlatformRet: "SUCCESS::调用成功"})
+	applied := externalStockApplyFromRelist(&mtop.ItemRelistResult{RawStatus: "1", Submitted: true, PlatformRet: "SUCCESS::调用成功", ReadQuantity: 4})
 	if applied.Noop || applied.Outcome != "submitted" || applied.ReadItemStatus != "1" || applied.ListingState != "unverified" || strings.Contains(applied.Diagnostic, "已在售，未提交编辑") || !strings.Contains(applied.Diagnostic, "platform_outcome=submitted") {
 		t.Fatalf("itemStatus=1 不能当成未提交的成功: %+v", applied)
 	}
 	// unknown 是未识别状态码仍要上架时的回执。
-	unknown := externalStockApplyFromRelist(&mtop.ItemRelistResult{RawStatus: "9"})
+	unknown := externalStockApplyFromRelist(&mtop.ItemRelistResult{RawStatus: "9", ReadQuantity: 2})
 	if unknown.Noop || unknown.Outcome != "refused" || unknown.ListingState != "unverified" || strings.Contains(unknown.Diagnostic, "已在售") {
 		t.Fatalf("未提交不能报成功: %+v", unknown)
+	}
+	// zero 是平台库存为 0 且没有提交时的回执。
+	zero := externalStockApplyFromRelist(&mtop.ItemRelistResult{RawStatus: "1", ReadQuantity: 0})
+	if zero.Outcome != "refused" || zero.StockAdjusted || !strings.Contains(zero.Diagnostic, "read_quantity=0") || !strings.Contains(zero.Diagnostic, "未提交编辑") || strings.Contains(zero.Diagnostic, "platform_outcome=submitted") {
+		t.Fatalf("零库存不能报上架成功: %+v", zero)
 	}
 }
 

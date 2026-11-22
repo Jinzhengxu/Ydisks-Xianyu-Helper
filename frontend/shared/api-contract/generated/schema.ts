@@ -4510,7 +4510,11 @@ export interface components {
             platform_outcome?: string;
             /** @description editDetail 读到的原始 itemStatus。1 不能证明商品正在出售。 */
             read_item_status?: string;
-            /** @description 平台 ret 或拒绝码的脱敏文本，不含 Cookie。 */
+            /** @description editDetail 读到的平台库存。库存接口 GET /stock 只返回 quantity，不返回 itemStatus。 */
+            read_quantity?: number;
+            /** @description 为真表示这次提交按已开启的同步平台库存改写了数量。为假表示没有改库存。 */
+            stock_adjusted?: boolean;
+            /** @description 平台 ret 或拒绝码的脱敏文本，不含 Cookie。QUANTITY_ZERO_NOT_ADJUSTED 表示库存为 0 且未改库存，因此没有提交。 */
             platform_ret?: string;
             config: components["schemas"]["ItemExternalStockResponse"];
         };

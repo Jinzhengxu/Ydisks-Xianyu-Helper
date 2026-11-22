@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,8 +49,8 @@ func (p *ItemPublishPort) Unpublish(ctx context.Context, userID int64, cookieID,
 	return itemapp.ExternalStockApplyResult{}, mapExternalStockPlatformError(err)
 }
 
-// Relist 重新上架同一个原商品。itemStatus 读数不会跳过编辑；只改提交的 itemStatus，不改价格、库存和描述。
-func (p *ItemPublishPort) Relist(ctx context.Context, userID int64, cookieID, itemID string) (itemapp.ExternalStockApplyResult, error) {
+// Relist 重新上架同一个原商品。itemStatus 读数不会跳过编辑。sync 为假时不改库存；平台库存为 0 时因此不提交。
+func (p *ItemPublishPort) Relist(ctx context.Context, userID int64, cookieID, itemID string, quantity int, sync bool) (itemapp.ExternalStockApplyResult, error) {
 	// applied 由平台调用闭包写入。
 	var applied itemapp.ExternalStockApplyResult
 	// persistErr、callErr 分别是会话写回错误和平台提交错误。
@@ -60,7 +61,7 @@ func (p *ItemPublishPort) Relist(ctx context.Context, userID int64, cookieID, it
 			return "", itemapp.ErrExternalStockEditUnsupported
 		}
 		// result、err 是原商品上架结果。
-		result, err := ensurer.EnsureItemOnSale(callCtx, cookies, itemID)
+		result, err := ensurer.EnsureItemOnSale(callCtx, cookies, itemID, mtop.EnsureItemOnSaleRequest{SyncQuantity: sync, Quantity: quantity})
 		if result != nil {
 			applied = externalStockApplyFromRelist(result)
 		}
@@ -94,14 +95,30 @@ func externalStockApplyFromRelist(result *mtop.ItemRelistResult) itemapp.Externa
 	}
 	// ret 是脱敏后的平台回执。
 	ret := sanitizePlatformText(result.PlatformRet)
+	// common 是读数诊断，不能把 itemStatus 或库存 0 写成已经在售。
+	common := itemapp.ExternalStockApplyResult{ListingState: "unverified", ReadItemStatus: raw, ReadQuantity: result.ReadQuantity, StockAdjusted: result.StockAdjusted, PlatformRet: ret}
 	if result.Submitted {
-		// note 标明平台接受了编辑，并说明读数不能证明当前在售。
-		note := "platform_outcome=submitted；read_item_status=" + raw + "；该读数不能证明商品当前在售；平台已接受 edit，只把 itemStatus 写成 0，价格、库存和描述沿用读取值；platform_ret=" + ret
-		return itemapp.ExternalStockApplyResult{Diagnostic: note, ListingState: "unverified", Outcome: "submitted", ReadItemStatus: raw, PlatformRet: ret}
+		// note 标明平台接受了编辑，并写明库存有没有被改。
+		note := "platform_outcome=submitted；read_item_status=" + raw + "；read_quantity=" + strconv.Itoa(result.ReadQuantity) + "；该读数不能证明商品当前在售；平台已接受 edit，itemStatus 写成 0"
+		if result.StockAdjusted {
+			note += "；stock_adjusted=true；written_quantity=" + strconv.Itoa(result.WrittenQuantity) + "；这是已开启同步平台库存后的明确改库存"
+		} else {
+			note += "；stock_adjusted=false；价格、库存和描述沿用读取值"
+		}
+		note += "；platform_ret=" + ret
+		common.Diagnostic = note
+		common.Outcome = "submitted"
+		return common
 	}
-	// note 是尚未被平台接受的读取说明，不能写成上架成功。
-	note := "platform_outcome=not_accepted；read_item_status=" + raw + "；未获得平台接受的编辑回执"
-	return itemapp.ExternalStockApplyResult{Diagnostic: note, ListingState: "unverified", Outcome: "refused", ReadItemStatus: raw, PlatformRet: ret}
+	if result.ReadQuantity <= 0 {
+		common.Diagnostic = "platform_outcome=refused；read_item_status=" + raw + "；read_quantity=0；stock_adjusted=false；未提交编辑；网页编辑不接受数量小于 1 的上架，未开启同步平台库存时不会把库存改成 1 或外部可用数"
+		common.Outcome = "refused"
+		common.PlatformRet = "QUANTITY_ZERO_NOT_ADJUSTED"
+		return common
+	}
+	common.Diagnostic = "platform_outcome=refused；read_item_status=" + raw + "；read_quantity=" + strconv.Itoa(result.ReadQuantity) + "；未获得平台接受的编辑回执"
+	common.Outcome = "refused"
+	return common
 }
 
 // sanitizePlatformText 保留平台回执里的错误码和短说明，去掉凭证和过长正文。
@@ -208,6 +225,8 @@ func mapExternalStockPlatformError(err error) error {
 	switch {
 	case errors.Is(err, itemapp.ErrExternalStockEditUnsupported), errors.Is(err, itemapp.ErrExternalStockRisk), errors.Is(err, itemapp.ErrExternalStockSession), errors.Is(err, itemapp.ErrExternalStockPlatform), errors.Is(err, itemapp.ErrExternalStockMultiSpec), errors.Is(err, itemapp.ErrExternalStockUnknownState):
 		return err
+	case errors.Is(err, mtop.ErrItemRelistZeroQuantity):
+		return errors.Join(itemapp.ErrExternalStockZeroQuantity, err)
 	case errors.Is(err, mtop.ErrItemEditUnsupported), errors.Is(err, itemapp.ErrStockEditUnsupported), errors.Is(err, itemapp.ErrRelistEditUnsupported):
 		return errors.Join(itemapp.ErrExternalStockEditUnsupported, errors.New("FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT"))
 	case errors.Is(err, mtop.ErrItemMultiSpecExternalQuantity):
