@@ -54,8 +54,10 @@ type externalStockUpdateRequest struct {
 
 // externalStockCheckRequest 是手动检查的可选请求体。
 type externalStockCheckRequest struct {
-	// DryRun 非空时只覆盖这一次检查是否演练。
+	// DryRun 为真时这一次只演练。为假时不能关闭已保存的演练开关。
 	DryRun *bool `json:"dry_run"`
+	// ExecuteOnce 为真时，这一次手动检查真实下架或重新上架，不修改已保存的演练开关。
+	ExecuteOnce bool `json:"execute_once"`
 }
 
 // externalStockHeaderResponse 只公开请求头名称，不返回值。
@@ -217,8 +219,12 @@ func (s *Server) checkItemExternalStock(w http.ResponseWriter, r *http.Request) 
 	}
 	// session 是当前登录用户。
 	session := auth.SessionFromContext(r.Context())
-	// options 是手动检查选项，允许越过退避。
-	options := itemapp.ExternalStockCheckOptions{Trigger: "manual", BypassBackoff: true}
+	if request.ExecuteOnce && request.DryRun != nil && *request.DryRun {
+		writeErr(w, http.StatusBadRequest, "execute_once 不能与演练同时指定")
+		return
+	}
+	// options 是手动检查选项，允许越过退避。调度和发货不会带上 ExecuteOnce。
+	options := itemapp.ExternalStockCheckOptions{Trigger: "manual", BypassBackoff: true, ExecuteOnce: request.ExecuteOnce}
 	if request.DryRun != nil {
 		options.ForceDryRun = *request.DryRun
 	}

@@ -351,6 +351,67 @@ func TestExternalStockSkipsRepeatUntilChangeCronOrManual(t *testing.T) {
 	repo.mu.Unlock()
 }
 
+// TestExternalStockExecuteOnceLeavesSavedDryRun 验证手动执行一次会真实上架，但不关闭已保存演练；调度和发货仍不写平台。
+func TestExternalStockExecuteOnceLeavesSavedDryRun(t *testing.T) {
+	// service、repo、_、platform、_ 是已保存演练开关的夹具。
+	service, repo, _, platform, _ := newExternalStockFixture(t, 1, ListingSnapshot{})
+	repo.mu.Lock()
+	repo.config.DryRun = true
+	repo.mu.Unlock()
+	// saved 是只传 dry_run=false 的手动检查，已保存演练仍然生效。
+	saved, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "manual", BypassBackoff: true})
+	if err != nil || !saved.DryRun || saved.Status != "dry_run" || platform.relists != 0 {
+		t.Fatalf("已保存演练不应被普通手动检查关闭: %+v err=%v relist=%d", saved, err, platform.relists)
+	}
+	service.mu.Lock()
+	delete(service.recent, "acc\x00item")
+	service.mu.Unlock()
+	// once 是明确要求执行一次的手动检查。
+	once, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "manual", ExecuteOnce: true, BypassBackoff: true})
+	if err != nil || once.DryRun || once.Status != "ok" || once.Action != ExternalStockActionRelist || platform.relists != 1 {
+		t.Fatalf("执行一次应真实上架: %+v err=%v relist=%d", once, err, platform.relists)
+	}
+	repo.mu.Lock()
+	if repo.config.DryRun != true {
+		t.Fatal("执行一次不应关闭已保存的演练开关")
+	}
+	// 清掉成功记录，让后续调度确实走到演练分支，而不是因为同一天相同库存被跳过。
+	repo.config.AppliedAction = ""
+	repo.config.AppliedAvailable = nil
+	repo.config.AppliedAt = time.Time{}
+	repo.mu.Unlock()
+	service.mu.Lock()
+	delete(service.recent, "acc\x00item")
+	service.mu.Unlock()
+	// scheduled 是周期检查，即使误带执行一次标记也不能写平台。
+	scheduled, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "schedule", ExecuteOnce: true})
+	if err != nil || !scheduled.DryRun || scheduled.Status != "dry_run" || platform.relists != 1 {
+		t.Fatalf("调度应保持演练: %+v err=%v relist=%d", scheduled, err, platform.relists)
+	}
+	service.mu.Lock()
+	delete(service.recent, "acc\x00item")
+	service.mu.Unlock()
+	// delivered 是付款发货后的检查，必须继续演练。
+	delivered, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "delivery", ExecuteOnce: true})
+	if err != nil || !delivered.DryRun || platform.relists != 1 || platform.unpublishes != 0 {
+		t.Fatalf("发货后检查应保持演练: %+v err=%v", delivered, err)
+	}
+	platform.actionErr = ErrExternalStockRisk
+	service.mu.Lock()
+	delete(service.recent, "acc\x00item")
+	service.mu.Unlock()
+	// failed 是执行一次遇到风控，只请求一次平台。
+	failed, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "manual", ExecuteOnce: true, BypassBackoff: true})
+	if err != nil || failed.Status != "backed_off" || platform.relists != 2 {
+		t.Fatalf("失败只能尝试一次: %+v err=%v relist=%d", failed, err, platform.relists)
+	}
+	repo.mu.Lock()
+	if !repo.config.DryRun {
+		t.Fatal("失败后演练开关仍应保持开启")
+	}
+	repo.mu.Unlock()
+}
+
 // TestBackedOffExternalStockDoesNotDelayDelivery 验证退避中的库存检查在发货回调里立即返回，并且不读取平台。
 func TestBackedOffExternalStockDoesNotDelayDelivery(t *testing.T) {
 	// service、repo、reader、platform、_ 是已经退避的夹具。

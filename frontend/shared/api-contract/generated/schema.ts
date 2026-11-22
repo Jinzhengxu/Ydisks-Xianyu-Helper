@@ -1192,7 +1192,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 立即检查商品外部库存，并可按请求只演练不改商品 */
+        /** 立即检查商品外部库存；execute_once 为真时只这一次真实执行且不修改已保存演练开关 */
         post: operations["postApiV1ItemsBycookie_idByitem_idExternalStockCheck"];
         delete?: never;
         options?: never;
@@ -4493,7 +4493,10 @@ export interface components {
             backoff_class: string;
         };
         ItemExternalStockCheckRequest: {
+            /** @description 为真时这一次只演练。为假时不能关闭已保存的演练开关。 */
             dry_run?: boolean;
+            /** @description 为真时这一次手动检查真实下架或重新上架，不修改已保存的演练开关。不能与 dry_run 为真同时使用。调度和付款发货忽略该字段。 */
+            execute_once?: boolean;
         };
         ItemExternalStockCheckResponse: {
             action: string;

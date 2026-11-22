@@ -72,10 +72,17 @@ export const ExternalStockModal: React.FC<ExternalStockModalProps> = ({ item, op
           <p className="text-xs text-gray-500">最近状态：{statusText}{config.lastAvailable !== null ? `，可用 ${config.lastAvailable}` : ''}</p>
           </>}
         </div>
-        <div className="modal-footer flex justify-end gap-2">
-          <button type="button" className="rounded-lg bg-gray-100 px-3 py-2 font-bold" disabled={editor.saving} onClick={/* dryRunClick 只演练这一次。 */ () => void editor.checkNow(true)}>演练</button>
-          <button type="button" className="rounded-lg bg-gray-100 px-3 py-2 font-bold" disabled={editor.saving} onClick={/* checkClick 按已保存策略立即检查。 */ () => void editor.checkNow(false)}>立即检查</button>
-          <button type="button" className="inline-flex items-center gap-1 rounded-lg bg-brand px-3 py-2 font-bold text-white" disabled={editor.saving} onClick={/* saveClick 保存外部库存配置。 */ () => void editor.save()}><Save className="h-4 w-4" />保存</button>
+        <div className="modal-footer flex flex-col gap-2">
+          {editor.executeArmed && <p className="text-sm text-amber-700" role="alert">确认后会按当前外部库存真实下架或重新上架一次，不会关闭已保存的演练开关。定时检查和付款发货仍按演练执行。</p>}
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" className="rounded-lg bg-gray-100 px-3 py-2 font-bold" disabled={editor.saving} onClick={/* dryRunClick 只演练这一次。 */ () => void editor.checkNow('preview')}>演练</button>
+            <button type="button" className="rounded-lg bg-gray-100 px-3 py-2 font-bold" disabled={editor.saving} onClick={/* checkClick 按已保存策略立即检查。 */ () => void editor.checkNow('saved')}>立即检查</button>
+            {editor.executeArmed ? <>
+              <button type="button" className="rounded-lg bg-gray-100 px-3 py-2 font-bold" disabled={editor.saving} onClick={/* cancelExecute 取消尚未发送的真实执行。 */ editor.cancelExecuteOnce}>取消</button>
+              <button type="button" className="rounded-lg bg-amber-600 px-3 py-2 font-bold text-white" disabled={editor.saving} onClick={/* confirmExecute 确认后真实执行一次。 */ () => void editor.confirmExecuteOnce()}>确认执行一次</button>
+            </> : <button type="button" className="rounded-lg bg-amber-50 px-3 py-2 font-bold text-amber-800" disabled={editor.saving} onClick={/* armExecute 打开真实执行确认。 */ editor.armExecuteOnce}>执行一次真实操作</button>}
+            <button type="button" className="inline-flex items-center gap-1 rounded-lg bg-brand px-3 py-2 font-bold text-white" disabled={editor.saving} onClick={/* saveClick 保存外部库存配置。 */ () => void editor.save()}><Save className="h-4 w-4" />保存</button>
+          </div>
         </div>
       </div>
     </div>,

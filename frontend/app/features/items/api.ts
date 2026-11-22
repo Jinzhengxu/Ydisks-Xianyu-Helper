@@ -193,12 +193,17 @@ export const updateItemExternalStock = async (cookieId: string, itemId: string, 
   return externalStockFromResponse(response);
 };
 
-// checkItemExternalStock 立即检查商品。dryRun 为真时只记录将要执行的动作。
-export const checkItemExternalStock = async (cookieId: string, itemId: string, dryRun: boolean, options?: RequestControlOptions): Promise<ExternalStockCheckResult> => {
+/** ExternalStockCheckMode 区分演练、按已保存开关检查，以及只执行一次真实操作。 */
+export type ExternalStockCheckMode = 'preview' | 'saved' | 'execute_once';
+
+// checkItemExternalStock 立即检查商品。execute_once 只这一次真实执行，不修改已保存演练。
+export const checkItemExternalStock = async (cookieId: string, itemId: string, mode: ExternalStockCheckMode, options?: RequestControlOptions): Promise<ExternalStockCheckResult> => {
+  // body 是这一次检查的显式模式。saved 不能关闭已保存的演练开关。
+  const body = mode === 'execute_once' ? { execute_once: true } : { dry_run: mode === 'preview' };
   // response 是一次检查的非秘密结果。
   const response = await runContractRequest(/* signal 控制立即检查的取消和超时。 */ signal => contractClient.POST('/api/v1/items/{cookie_id}/{item_id}/external-stock/check', {
     params: { path: { cookie_id: cookieId, item_id: itemId } },
-    body: { dry_run: dryRun },
+    body,
     signal,
   }), { timeoutMs: 90_000, ...options });
   return {

@@ -79,8 +79,10 @@ type ExternalStockCheckOptions struct {
 	Trigger string
 	// CronMatch 表示这次调度正好命中 cron，相同库存也要重新执行一次。
 	CronMatch bool
-	// ForceDryRun 让这一次只演练，不改变已保存的演练开关。
+	// ForceDryRun 让这一次只演练，不改变已保存的演练开关。它不能关闭已保存的演练。
 	ForceDryRun bool
+	// ExecuteOnce 只在手动检查时生效，允许这一次真实下架或重新上架，不改已保存的演练开关。
+	ExecuteOnce bool
 	// BypassBackoff 允许手动检查越过退避；失败后仍会重新退避。
 	BypassBackoff bool
 }
@@ -528,8 +530,8 @@ func (service *ExternalStockService) checkLocked(ctx context.Context, cookieID, 
 	}
 	// count 是本次成功读到的可用库存副本，供状态保存。
 	count := available
-	// dryRun 合并保存的演练开关和本次强制演练。
-	dryRun := config.DryRun || options.ForceDryRun
+	// dryRun 默认沿用已保存演练；只有手动且明确要求执行一次时才写平台。
+	dryRun := externalStockDryRun(config, options)
 	// decision 只由外部可用库存决定下架或重新上架。
 	decision := DecideExternalStock(available, dryRun)
 	if decision.Action == ExternalStockActionRelist && !options.BypassBackoff && config.BackoffClass == ExternalStockBackoffRelist && now.Before(config.BackoffUntil) {

@@ -44,10 +44,32 @@ describe('useExternalStockEditor', /* suite 验证读取、保存和演练不会
     const hook = renderHook(/* renderEditor 渲染外部库存编辑器。 */ () => useExternalStockEditor(item, true));
     await waitFor(/* loaded 等待配置出现。 */ () => expect(hook.result.current.config).not.toBeNull());
     // runDryCheck 执行一次演练检查。
-    const runDryCheck = async () => { await hook.result.current.checkNow(true); };
+    const runDryCheck = async () => { await hook.result.current.checkNow('preview'); };
     await act(runDryCheck);
-    expect(checkItemExternalStock).toHaveBeenCalledWith('acc', 'item-1', true);
+    expect(checkItemExternalStock).toHaveBeenCalledWith('acc', 'item-1', 'preview');
     expect(hook.result.current.error).toContain('不支持网页端编辑');
+  });
+
+  test('确认后才发送一次真实执行，已保存演练保持开启', /* executeCase 验证执行一次需要确认且不改演练开关。 */ async () => {
+    vi.mocked(getItemExternalStock).mockResolvedValue({ ...config, dryRun: true });
+    vi.mocked(checkItemExternalStock).mockResolvedValue({
+      action: 'relist', status: 'ok', available: 1, message: '已重新上架', dryRun: false, listingState: 'on_sale', config: { ...config, dryRun: true },
+    });
+    // hook 是已加载且演练开启的编辑器。
+    const hook = renderHook(/* renderEditor 渲染外部库存编辑器。 */ () => useExternalStockEditor(item, true));
+    await waitFor(/* loaded 等待配置出现。 */ () => expect(hook.result.current.config?.dryRun).toBe(true));
+    await act(/* armOnly 只打开确认。 */ async () => { hook.result.current.armExecuteOnce(); });
+    expect(hook.result.current.executeArmed).toBe(true);
+    expect(checkItemExternalStock).not.toHaveBeenCalled();
+    await act(/* cancelArmed 取消确认。 */ async () => { hook.result.current.cancelExecuteOnce(); });
+    expect(checkItemExternalStock).not.toHaveBeenCalled();
+    await act(/* armAgain 再次打开确认。 */ async () => { hook.result.current.armExecuteOnce(); });
+    // confirmOnce 确认后发送真实执行。
+    const confirmOnce = async () => { await hook.result.current.confirmExecuteOnce(); };
+    await act(confirmOnce);
+    expect(checkItemExternalStock).toHaveBeenCalledWith('acc', 'item-1', 'execute_once');
+    expect(hook.result.current.config?.dryRun).toBe(true);
+    expect(updateItemExternalStock).not.toHaveBeenCalled();
   });
 
   test('保存后清空请求头输入', /* saveCase 验证保存成功后的草稿。 */ async () => {

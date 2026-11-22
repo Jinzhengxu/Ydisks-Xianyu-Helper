@@ -155,6 +155,18 @@ type ExternalStockDecision struct {
 	BackoffClass string
 }
 
+// externalStockDryRun 判断这一次是否只演练。已保存的演练开关对调度和发货始终有效。
+// 手动请求里的 ExecuteOnce 允许这一次真实执行，且不能与 ForceDryRun 同时成立。
+func externalStockDryRun(config ExternalStockConfig, options ExternalStockCheckOptions) bool {
+	if options.ExecuteOnce && options.ForceDryRun {
+		return true
+	}
+	if options.Trigger == "manual" && options.ExecuteOnce {
+		return false
+	}
+	return config.DryRun || options.ForceDryRun
+}
+
 // DecideExternalStock 只根据外部可用库存决定目标状态，不读取也不依赖当前在售状态。
 // available 小于 0 视为无效读数。available 小于等于 0 时只下架，大于 0 时只重新上架原商品。
 // dryRun 不改变动作种类，只标记不要写平台。在售状态未知不会产生停止或退避。

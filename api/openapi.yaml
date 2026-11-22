@@ -4332,7 +4332,7 @@ paths:
   "/api/v1/items/{cookie_id}/{item_id}/external-stock/check":
     post:
       operationId: postApiV1ItemsBycookie_idByitem_idExternalStockCheck
-      summary: 立即检查商品外部库存，并可按请求只演练不改商品
+      summary: 立即检查商品外部库存；execute_once 为真时只这一次真实执行且不修改已保存演练开关
       security: [{cookieAuth: []}, {bearerAuth: []}]
       parameters:
         - name: cookie_id
@@ -12014,7 +12014,8 @@ components:
     ItemExternalStockCheckRequest:
       type: object
       properties:
-        dry_run: {type: boolean}
+        dry_run: {type: boolean, description: 为真时这一次只演练。为假时不能关闭已保存的演练开关。}
+        execute_once: {type: boolean, description: 为真时这一次手动检查真实下架或重新上架，不修改已保存的演练开关。不能与 dry_run 为真同时使用。调度和付款发货忽略该字段。}
     ItemExternalStockCheckResponse:
       type: object
       required: [action, status, message, dry_run, listing_state, config]

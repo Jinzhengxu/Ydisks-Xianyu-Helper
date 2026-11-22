@@ -57,4 +57,23 @@ func TestItemExternalStockConfigHidesHeaderSecrets(t *testing.T) {
 	if strings.Contains(checkRecorder.Body.String(), secret) {
 		t.Fatalf("检查响应包含请求头明文: %s", checkRecorder.Body.String())
 	}
+	// conflictReq 同时要求演练和真实执行，必须拒绝且不改已保存演练。
+	conflictReq := httptest.NewRequest(http.MethodPost, "/api/v1/items/acc1/stock-item/external-stock/check", strings.NewReader(`{"dry_run":true,"execute_once":true}`))
+	conflictReq.AddCookie(sessionCookie)
+	// conflictRecorder 捕获冲突请求的响应。
+	conflictRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(conflictRecorder, conflictReq)
+	if conflictRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("冲突请求状态=%d body=%s", conflictRecorder.Code, conflictRecorder.Body.String())
+	}
+	// onceReq 要求这一次真实执行。外部地址不可达，因此不会改商品，但响应里的已保存演练必须仍为真。
+	onceReq := httptest.NewRequest(http.MethodPost, "/api/v1/items/acc1/stock-item/external-stock/check", strings.NewReader(`{"execute_once":true}`))
+	onceReq.AddCookie(sessionCookie)
+	// onceRecorder 捕获执行一次的响应。
+	onceRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(onceRecorder, onceReq)
+	assertOpenAPISuccessResponse(t, onceReq, onceRecorder)
+	if !strings.Contains(onceRecorder.Body.String(), `"dry_run":true`) || strings.Contains(onceRecorder.Body.String(), secret) {
+		t.Fatalf("执行一次不应关闭已保存演练或回显秘密: %s", onceRecorder.Body.String())
+	}
 }
