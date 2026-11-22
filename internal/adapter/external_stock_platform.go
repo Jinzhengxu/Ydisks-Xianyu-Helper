@@ -93,17 +93,16 @@ func externalStockContext(ctx context.Context) context.Context {
 	return ctx
 }
 
-// listingFromDetail 把编辑详情的 itemStatus 映射为在售、下架或未知。
+// listingFromDetail 把编辑详情的 itemStatus 映射为在售、下架或未知，并保留原始状态码供诊断。
 func listingFromDetail(detail *mtop.ItemEditDetail) itemapp.ListingSnapshot {
-	// state 默认未知，只有明确的在售和下架取值才会放行后续动作。
-	state := itemapp.ListingUnknown
-	switch strings.TrimSpace(detail.Status) {
-	case "0":
-		state = itemapp.ListingOnSale
-	case "-2":
-		state = itemapp.ListingOffSale
+	// raw 是平台原样返回的 itemStatus，不含 Cookie 或签名。
+	raw := strings.TrimSpace(detail.Status)
+	// state、known 是该状态码能否对应到在售或下架。
+	state, known := itemapp.ClassifyEditDetailStatus(raw)
+	if !known {
+		state = itemapp.ListingUnknown
 	}
-	return itemapp.ListingSnapshot{State: state, Quantity: detail.Quantity, QuantityKnown: true, MultiSpec: detail.MultiSpec}
+	return itemapp.ListingSnapshot{State: state, Quantity: detail.Quantity, QuantityKnown: true, MultiSpec: detail.MultiSpec, RawStatus: raw, Source: "editDetail"}
 }
 
 // mapExternalStockPlatformError 把平台错误收成外部库存可退避的哨兵错误。

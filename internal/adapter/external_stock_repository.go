@@ -2,7 +2,10 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 
 	itemapp "xianyu-go/internal/application/items"
@@ -102,6 +105,54 @@ func (repository *ExternalStockRepository) SaveStatus(ctx context.Context, cooki
 	row.CookieID = cookieID
 	row.ItemID = itemID
 	return repository.store.ItemExternalStock.SaveStatus(ctx, row)
+}
+
+// LocalItemStatus 从商品同步写入的 item_detail 读取 item_status。没有记录或没有该字段时 present 为 false。
+func (repository *ExternalStockRepository) LocalItemStatus(ctx context.Context, cookieID, itemID string) (int, bool, error) {
+	if repository == nil || repository.store == nil || repository.store.Items == nil {
+		return 0, false, errors.New("外部库存商品仓储未初始化")
+	}
+	// row、err 是本地商品详情及读取错误。
+	row, err := repository.store.Items.GetByCookieItem(ctx, cookieID, itemID)
+	if errors.Is(err, db.ErrNotFound) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return localSyncedItemStatus(row.ItemDetail)
+}
+
+// localSyncedItemStatus 解析同步详情里的 item_status。正文其他字段不返回。
+func localSyncedItemStatus(detail string) (int, bool, error) {
+	if strings.TrimSpace(detail) == "" {
+		return 0, false, nil
+	}
+	// payload 是商品同步保存的详情 JSON。
+	var payload map[string]any
+	if // err 是详情不是 JSON 时的解码错误，此时只当作没有状态码。
+	err := json.Unmarshal([]byte(detail), &payload); err != nil {
+		return 0, false, nil
+	}
+	// raw、present 是 item_status 原值及其是否存在。
+	raw, present := payload["item_status"]
+	if !present {
+		return 0, false, nil
+	}
+	// typed 是 item_status 的 JSON 类型，数字和字符串都接受。
+	switch typed := raw.(type) {
+	case float64:
+		return int(typed), true, nil
+	case string:
+		// parsed、err 是字符串状态码及其解析错误。
+		parsed, err := strconv.Atoi(strings.TrimSpace(typed))
+		if err != nil {
+			return 0, false, nil
+		}
+		return parsed, true, nil
+	default:
+		return 0, false, nil
+	}
 }
 
 // ListEnabled 返回已启用商品的非秘密配置。

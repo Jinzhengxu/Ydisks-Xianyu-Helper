@@ -43,6 +43,35 @@ func TestParseAvailableCount(t *testing.T) {
 	}
 }
 
+// TestClassifyListingStatus 验证真机编辑详情的在售状态码，以及本地同步只把 0 当成在售。
+func TestClassifyListingStatus(t *testing.T) {
+	// state、known 是编辑详情状态码的解释。
+	state, known := ClassifyEditDetailStatus("1")
+	if state != ListingOnSale || !known {
+		t.Fatalf("编辑详情 1 应是在售: %s %v", state, known)
+	}
+	state, known = ClassifyEditDetailStatus("0")
+	if state != ListingOnSale || !known {
+		t.Fatalf("编辑详情 0 应是在售: %s %v", state, known)
+	}
+	state, known = ClassifyEditDetailStatus("-2")
+	if state != ListingOffSale || !known {
+		t.Fatalf("编辑详情 -2 应是下架: %s %v", state, known)
+	}
+	state, known = ClassifyEditDetailStatus("9")
+	if state != ListingUnknown || known {
+		t.Fatalf("未知状态码不能当成下架: %s %v", state, known)
+	}
+	state, known = ClassifyLocalItemStatus(0, true)
+	if state != ListingOnSale || !known {
+		t.Fatalf("本地 0 应是在售: %s %v", state, known)
+	}
+	state, known = ClassifyLocalItemStatus(1, true)
+	if known {
+		t.Fatalf("本地其他状态不能猜测为下架: %s", state)
+	}
+}
+
 // TestDecideExternalStockNeverRelistsWhenEmpty 验证库存为 0 时只下架或保持下架，绝不上架。
 func TestDecideExternalStockNeverRelistsWhenEmpty(t *testing.T) {
 	// onSale 是仍在售的商品。

@@ -24,6 +24,9 @@ type externalStockRepoFake struct {
 	exists bool
 	// userID 是账号所属用户。
 	userID int64
+	// localStatus、localPresent 是商品同步记录里的 item_status。
+	localStatus  int
+	localPresent bool
 }
 
 // AccountOwned 返回预设归属。
@@ -89,6 +92,11 @@ func (repository *externalStockRepoFake) SaveStatus(_ context.Context, _, _ stri
 	repository.config.BackoffUntil = config.BackoffUntil
 	repository.config.BackoffClass = config.BackoffClass
 	return nil
+}
+
+// LocalItemStatus 返回预设的本地同步状态。
+func (repository *externalStockRepoFake) LocalItemStatus(context.Context, string, string) (int, bool, error) {
+	return repository.localStatus, repository.localPresent, nil
 }
 
 // ListEnabled 返回启用中的配置。
@@ -270,6 +278,62 @@ func TestExternalStockFetchFailureDoesNotTouchPlatform(t *testing.T) {
 	result, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "delivery"})
 	if err != nil || result.Status != "backed_off" || platform.inspects != 0 || platform.unpublishes != 0 {
 		t.Fatalf("result=%+v err=%v inspect=%d", result, err, platform.inspects)
+	}
+}
+
+// TestExternalStockUsesLiveEditStatusAndLocalFallback 验证 itemStatus=1 视为在售，无法识别时改用本地同步的在售记录。
+func TestExternalStockUsesLiveEditStatusAndLocalFallback(t *testing.T) {
+	// service、_、_、platform、_ 是外部库存为 1、编辑详情返回真机在售码的夹具。
+	service, repo, _, platform, _ := newExternalStockFixture(t, 1, ListingSnapshot{State: ListingOnSale, Quantity: 1, QuantityKnown: true, RawStatus: "1", Source: "editDetail"})
+	// live 是在售商品的演练结果。
+	live, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "manual", ForceDryRun: true, BypassBackoff: true})
+	if err != nil || live.Action != ExternalStockActionNone || live.ListingState != ListingOnSale || !strings.Contains(live.Message, "itemStatus=1") {
+		t.Fatalf("在售码 1 不应停止: %+v err=%v", live, err)
+	}
+	repo.mu.Lock()
+	repo.config.LastChecked = time.Time{}
+	repo.localStatus = 0
+	repo.localPresent = true
+	repo.mu.Unlock()
+	service.mu.Lock()
+	delete(service.recent, "acc\x00item")
+	service.mu.Unlock()
+	platform.listing = ListingSnapshot{State: ListingUnknown, Quantity: 1, QuantityKnown: true, RawStatus: "9", Source: "editDetail"}
+	// fallback 是编辑详情状态码未知、本地同步为在售时的结果。
+	fallback, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "manual", ForceDryRun: true, BypassBackoff: true})
+	if err != nil || fallback.Action != ExternalStockActionNone || fallback.ListingState != ListingOnSale || !strings.Contains(fallback.Message, "item_status=0") {
+		t.Fatalf("应改用本地在售状态: %+v err=%v", fallback, err)
+	}
+}
+
+// TestBackedOffExternalStockDoesNotDelayDelivery 验证退避中的库存检查在发货回调里立即返回，并且不读取平台。
+func TestBackedOffExternalStockDoesNotDelayDelivery(t *testing.T) {
+	// service、repo、reader、platform、_ 是已经退避的夹具。
+	service, repo, reader, platform, _ := newExternalStockFixture(t, 1, ListingSnapshot{State: ListingOnSale, Quantity: 1, QuantityKnown: true, RawStatus: "1"})
+	repo.mu.Lock()
+	repo.config.BackoffClass = ExternalStockBackoffAll
+	repo.config.BackoffUntil = time.Now().Add(time.Hour)
+	repo.mu.Unlock()
+	// started 是回调返回前的时间，用来确认没有等待平台。
+	started := time.Now()
+	service.AfterPaidDelivery("acc", "item", "order-1")
+	if time.Since(started) > time.Second {
+		t.Fatal("发货后的库存检查不应阻塞发货回调")
+	}
+	// deadline 是等待后台检查退出的时刻。
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		service.mu.Lock()
+		// slots 是仍在运行的发货后检查数量。
+		slots := service.deliverySlots
+		service.mu.Unlock()
+		if slots == 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if reader.calls != 0 || platform.inspects != 0 {
+		t.Fatalf("退避中的检查不应访问外部库存或平台 reads=%d inspects=%d", reader.calls, platform.inspects)
 	}
 }
 

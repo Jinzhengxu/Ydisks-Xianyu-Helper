@@ -100,7 +100,7 @@ var (
 	ErrExternalStockMultiSpec = errors.New("多规格商品暂不能按外部库存改写各规格库存")
 )
 
-// ListingSnapshot 是一次平台只读检查得到的在售状态和库存。
+// ListingSnapshot 是一次在售状态读取的结果，可以来自网页编辑详情或本地同步记录。
 type ListingSnapshot struct {
 	// State 是 on_sale、off_sale 或 unknown。
 	State string
@@ -110,6 +110,33 @@ type ListingSnapshot struct {
 	QuantityKnown bool
 	// MultiSpec 表示库存由多行规格组成。
 	MultiSpec bool
+	// RawStatus 是来源里的原始状态码，只用于诊断，不是凭证。
+	RawStatus string
+	// Source 是 editDetail 或 local_item_detail。
+	Source string
+}
+
+// ClassifyEditDetailStatus 解释网页编辑详情里的 itemStatus。
+// 真机编辑详情对在售商品返回 "1"（库存编辑夹具沿用该形态）；提交重新上架时写入 "0"，模拟器也会把在售读回 "0"。下架为 "-2"。
+// 其他取值视为未知，调用方应保留原始码并改用本地同步状态，不能把它当成下架。
+func ClassifyEditDetailStatus(raw string) (string, bool) {
+	switch strings.TrimSpace(raw) {
+	case "0", "1":
+		return ListingOnSale, true
+	case "-2":
+		return ListingOffSale, true
+	default:
+		return ListingUnknown, false
+	}
+}
+
+// ClassifyLocalItemStatus 解释商品同步写进 item_detail.item_status 的列表状态。
+// 卖家在售列表和平台模拟器都用 0 表示在售。其他取值不猜测为下架，避免用过期列表把仍在售的商品重新上架。
+func ClassifyLocalItemStatus(status int, present bool) (string, bool) {
+	if present && status == 0 {
+		return ListingOnSale, true
+	}
+	return ListingUnknown, false
 }
 
 // ExternalStockDecision 是纯决策结果，不包含平台调用。
