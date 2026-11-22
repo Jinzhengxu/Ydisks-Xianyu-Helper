@@ -35,24 +35,98 @@ func (p *ItemPublishPort) Inspect(ctx context.Context, userID int64, cookieID, i
 	return snapshot, nil
 }
 
-// Unpublish 下架原商品。调用既有下架端口，不发布新商品。
-func (p *ItemPublishPort) Unpublish(ctx context.Context, userID int64, cookieID, itemID string) error {
+// Unpublish 下架原商品。已经不在售的平台回执视为成功，不另建商品。
+func (p *ItemPublishPort) Unpublish(ctx context.Context, userID int64, cookieID, itemID string) (itemapp.ExternalStockApplyResult, error) {
 	// outcome、err 是平台下架结果。
-	_, err := p.DownShelf(externalStockContext(ctx), userID, cookieID, itemID)
-	if err != nil {
-		return mapExternalStockPlatformError(err)
+	outcome, err := p.DownShelf(externalStockContext(ctx), userID, cookieID, itemID)
+	if err == nil {
+		return itemapp.ExternalStockApplyResult{Diagnostic: redactDownShelfMessage(outcome.Message), ListingState: itemapp.ListingOffSale}, nil
 	}
-	return nil
+	if downShelfAlreadyOff(err) {
+		return itemapp.ExternalStockApplyResult{Diagnostic: "下架接口表示商品已不在售", ListingState: itemapp.ListingOffSale, Noop: true}, nil
+	}
+	return itemapp.ExternalStockApplyResult{}, mapExternalStockPlatformError(err)
 }
 
-// Relist 重新上架原商品。sync 为真时写入指定单规格库存。
-func (p *ItemPublishPort) Relist(ctx context.Context, userID int64, cookieID, itemID string, quantity int, sync bool) error {
-	if !sync {
-		// outcome、err 是沿用既有最小库存补回的重新上架结果。
-		_, err := p.RelistItem(externalStockContext(ctx), userID, cookieID, itemID)
-		return mapExternalStockPlatformError(err)
+// Relist 重新上架同一个原商品。已经在售时不提交编辑，因此不改价格、库存和描述。
+func (p *ItemPublishPort) Relist(ctx context.Context, userID int64, cookieID, itemID string) (itemapp.ExternalStockApplyResult, error) {
+	// applied 由平台调用闭包写入。
+	var applied itemapp.ExternalStockApplyResult
+	// persistErr、callErr 分别是会话写回错误和平台提交错误。
+	persistErr, callErr := p.runItemEditCall(externalStockContext(ctx), userID, cookieID, 90*time.Second, itemapp.ErrExternalStockSession, func(callCtx context.Context, client mtop.Client, cookies string) (string, error) {
+		// ensurer、ok 是只改在售状态的幂等上架能力。
+		ensurer, ok := client.(mtop.ItemEnsureOnSaleClient)
+		if !ok {
+			return "", itemapp.ErrExternalStockEditUnsupported
+		}
+		// result、err 是原商品上架结果。
+		result, err := ensurer.EnsureItemOnSale(callCtx, cookies, itemID)
+		if err != nil {
+			return "", err
+		}
+		if result == nil {
+			return "", errors.New("闲鱼商品重新上架未返回结果")
+		}
+		applied = externalStockApplyFromRelist(result)
+		return result.UpdatedCookies, nil
+	}, mapExternalStockPlatformError)
+	if callErr != nil {
+		return itemapp.ExternalStockApplyResult{}, callErr
 	}
-	return p.SyncStock(ctx, userID, cookieID, itemID, quantity)
+	if persistErr != nil && p.logger != nil {
+		p.logger.WarnContext(ctx, "外部库存同步后保存账号会话失败", "account", cookieID, "error", persistErr)
+	}
+	return applied, nil
+}
+
+// externalStockApplyFromRelist 把上架回执收成不含凭证的诊断。
+func externalStockApplyFromRelist(result *mtop.ItemRelistResult) itemapp.ExternalStockApplyResult {
+	// raw 是原始 itemStatus；空字符串显示为“空”。
+	raw := strings.TrimSpace(result.RawStatus)
+	if raw == "" {
+		raw = "空"
+	}
+	// state、known 是该状态码能否对应到在售或下架。未知也原样保留。
+	state, known := itemapp.ClassifyEditDetailStatus(raw)
+	if !known {
+		state = itemapp.ListingUnknown
+	}
+	// note 说明是否提交了编辑，以及提交时只改了状态码。
+	note := "editDetail itemStatus=" + raw
+	if result.AlreadyOnSale {
+		note += "；已在售，未提交编辑"
+	} else {
+		note += "；已按原详情重新上架，只把 itemStatus 写成 0"
+	}
+	return itemapp.ExternalStockApplyResult{Diagnostic: note, ListingState: state, Noop: result.AlreadyOnSale}
+}
+
+// redactDownShelfMessage 保留下架回执的短文本。疑似凭证或过长文本改成固定说明。
+func redactDownShelfMessage(message string) string {
+	// text 是去掉首尾空白后的平台回执。
+	text := strings.TrimSpace(message)
+	// lower 用来识别凭证字样，不回传原文中的秘密。
+	lower := strings.ToLower(text)
+	if text == "" || len(text) > 80 || strings.Contains(lower, "cookie") || strings.Contains(lower, "token") || strings.Contains(lower, "bearer") {
+		return "downshelf 已确认"
+	}
+	return "downshelf " + text
+}
+
+// downShelfAlreadyOff 判断下架失败是否表示商品已经不在售。其他失败仍要退避。
+func downShelfAlreadyOff(err error) bool {
+	if err == nil {
+		return false
+	}
+	// text 是平台错误的首行。
+	text := err.Error()
+	// marker 是明确表示已经下架的短码或中文。
+	for _, marker := range []string{"已下架", "已经下架", "不在架", "ALREADY_DOWN", "ITEM_NOT_ONLINE", "NOT_ON_SALE"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // SyncStock 把单规格库存改成 quantity，并保证商品处于在售。固定最多两次平台请求。

@@ -80,13 +80,16 @@ func TestItemExternalStockEncryptsHeaders(t *testing.T) {
 	row.LastAvailable = &count
 	row.LastAction = "unpublish"
 	row.LastStatus = "ok"
+	row.AppliedAction = "unpublish"
+	row.AppliedAvailable = &count
+	row.AppliedUnix = 10
 	if // statusErr 是写入检查状态失败。
 	statusErr := store.ItemExternalStock.SaveStatus(ctx, row); statusErr != nil {
 		t.Fatal(statusErr)
 	}
 	// after 是状态更新后的配置，请求头应仍在。
 	after, afterErr := store.ItemExternalStock.Get(ctx, "stock-account", "item-1")
-	if afterErr != nil || after.LastAction != "unpublish" || after.LastAvailable == nil || *after.LastAvailable != 0 || len(after.HeaderNames) != 1 {
+	if afterErr != nil || after.LastAction != "unpublish" || after.LastAvailable == nil || *after.LastAvailable != 0 || after.AppliedAction != "unpublish" || after.AppliedAvailable == nil || *after.AppliedAvailable != 0 || after.AppliedUnix != 10 || len(after.HeaderNames) != 1 {
 		t.Fatalf("状态更新异常: %+v err=%v", after, afterErr)
 	}
 }

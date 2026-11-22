@@ -16,10 +16,12 @@ const itemStatusOnSale = "0"
 type ItemRelistResult struct {
 	// ItemID 是被处理的商品 ID。
 	ItemID string
-	// AlreadyOnSale 表示读取详情时商品已在售且有库存，未提交 edit。
+	// AlreadyOnSale 表示读取详情时商品已在售，未提交 edit。
 	AlreadyOnSale bool
 	// RestoredQuantity 表示库存为 0 的商品被补回了最小库存（单规格为 1，多规格为各规格行 1）。
 	RestoredQuantity bool
+	// RawStatus 是 editDetail 返回的原始 itemStatus，只用于诊断，不含 Cookie。
+	RawStatus string
 	// UpdatedCookies 是请求累计更新后的 Cookie；为空表示没有变化。
 	UpdatedCookies string
 }
@@ -42,7 +44,7 @@ func (c *ClientImpl) RelistItem(ctx context.Context, cookiesStr, itemID string) 
 		return nil, ErrItemEditDetailUnusable
 	}
 	// result 是调用结果；读取阶段拿到的 Cookie 更新始终带回。
-	result := &ItemRelistResult{ItemID: id, UpdatedCookies: detail.UpdatedCookies}
+	result := &ItemRelistResult{ItemID: id, UpdatedCookies: detail.UpdatedCookies, RawStatus: strings.TrimSpace(detail.Status)}
 	if strings.TrimSpace(detail.Status) == itemStatusOnSale && detail.Quantity > 0 {
 		result.AlreadyOnSale = true
 		return result, nil
@@ -128,7 +130,7 @@ func (c *ClientImpl) RelistItemWithQuantity(ctx context.Context, cookiesStr, ite
 		return nil, ErrItemMultiSpecExternalQuantity
 	}
 	// result 是调用结果；读取阶段拿到的 Cookie 更新始终带回。
-	result := &ItemRelistResult{ItemID: id, UpdatedCookies: detail.UpdatedCookies}
+	result := &ItemRelistResult{ItemID: id, UpdatedCookies: detail.UpdatedCookies, RawStatus: strings.TrimSpace(detail.Status)}
 	if strings.TrimSpace(detail.Status) == itemStatusOnSale && detail.Quantity == quantity {
 		result.AlreadyOnSale = true
 		return result, nil
@@ -149,6 +151,63 @@ func (c *ClientImpl) RelistItemWithQuantity(ctx context.Context, cookiesStr, ite
 	result.UpdatedCookies = cookies
 	return result, nil
 }
+
+// editDetailAlreadyOnSale 判断编辑详情的 itemStatus 是否已经表示在售。
+// 真机在售商品返回 "1"，提交在售和模拟器读回使用 "0"。这两种都不需要再提交编辑。
+func editDetailAlreadyOnSale(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "0", "1":
+		return true
+	default:
+		return false
+	}
+}
+
+// EnsureItemOnSale 把原商品置于在售。已在售时只读取详情并成功返回，不提交编辑，因此不改价格、库存和描述。
+// 不在售或状态码无法识别时，用当前详情原样回填，只把 itemStatus 写成在售值 "0"。固定最多两次平台请求，失败不重试。
+func (c *ClientImpl) EnsureItemOnSale(ctx context.Context, cookiesStr, itemID string) (*ItemRelistResult, error) {
+	// id 是规范化后的原商品 ID，不会另建商品。
+	id := strings.TrimSpace(itemID)
+	if id == "" {
+		return nil, ErrItemStockInvalid
+	}
+	// detail、err 是提交前读取的最新快照。读取失败时不提交。
+	detail, err := c.FetchItemEditDetail(ctx, cookiesStr, id)
+	if err != nil {
+		return nil, err
+	}
+	if detail.ItemID != id {
+		return nil, ErrItemEditDetailUnusable
+	}
+	// result 带回原始状态码和读取阶段的 Cookie 更新。
+	result := &ItemRelistResult{ItemID: id, UpdatedCookies: detail.UpdatedCookies, RawStatus: strings.TrimSpace(detail.Status)}
+	if editDetailAlreadyOnSale(detail.Status) {
+		result.AlreadyOnSale = true
+		return result, nil
+	}
+	// payload 是原详情的全量副本，随后只改在售状态。
+	payload, err := cloneItemEditPayload(detail, id)
+	if err != nil {
+		return nil, err
+	}
+	payload["itemStatus"] = itemStatusOnSale
+	// cookies 是提交后累计更新的 Cookie。
+	_, _, cookies, err := c.submitItemEdit(ctx, cookiesStr, detail, id, payload)
+	if err != nil {
+		return nil, err
+	}
+	result.UpdatedCookies = cookies
+	return result, nil
+}
+
+// ItemEnsureOnSaleClient 是外部库存把原商品置于在售的可选能力，避免扩大所有客户端替身。
+type ItemEnsureOnSaleClient interface {
+	// EnsureItemOnSale 保证原商品在售。已在售时不提交编辑。
+	EnsureItemOnSale(ctx context.Context, cookiesStr, itemID string) (*ItemRelistResult, error)
+}
+
+// 确保真实客户端实现外部库存的幂等上架。
+var _ ItemEnsureOnSaleClient = (*ClientImpl)(nil)
 
 // ItemRelistQuantityClient 是按指定库存重新上架的可选扩展，避免扩大所有客户端替身。
 type ItemRelistQuantityClient interface {

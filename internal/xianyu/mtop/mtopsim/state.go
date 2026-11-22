@@ -89,6 +89,8 @@ type Item struct {
 	EditData map[string]any
 	// EditCount 是 edit 接口成功修改该商品的次数。
 	EditCount int
+	// EditStatus 非空时覆盖 editDetail 返回的 itemStatus，用来模拟真机在售码 1 或其他未识别码。
+	EditStatus string
 }
 
 // ItemSKU 是多规格商品的一行规格组合及其库存。
@@ -306,6 +308,16 @@ func (g *Gateway) MarkEditUnsupported(itemID string) {
 	// item、exists 是被改变库存的平台商品及其是否存在。
 	if item, exists := g.items[itemID]; exists {
 		item.EditUnsupported = true
+	}
+}
+
+// SetEditStatus 覆盖 editDetail 返回的 itemStatus。空字符串恢复按在售布尔值生成。
+func (g *Gateway) SetEditStatus(itemID, status string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	// item、exists 是被覆盖状态码的平台商品及其是否存在。
+	if item, exists := g.items[itemID]; exists {
+		item.EditStatus = status
 	}
 }
 

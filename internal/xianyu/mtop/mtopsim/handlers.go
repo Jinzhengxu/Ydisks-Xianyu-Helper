@@ -534,6 +534,9 @@ func (g *Gateway) handleItemEditDetail(acct *account, data map[string]any) ([]st
 	if item.OnSale {
 		detail["itemStatus"] = "0"
 	}
+	if item.EditStatus != "" {
+		detail["itemStatus"] = item.EditStatus
+	}
 	detail["bizcode"] = "pcMainPublish"
 	if item.MultiSpec {
 		detail["quantity"] = "1"

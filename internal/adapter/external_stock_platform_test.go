@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"errors"
 	"testing"
 
 	itemapp "xianyu-go/internal/application/items"
@@ -30,5 +31,29 @@ func TestLocalSyncedItemStatusReadsOnlyStatusCode(t *testing.T) {
 	}
 	if _, present, err = localSyncedItemStatus(`{"title":"没有状态"}`); err != nil || present {
 		t.Fatal("缺少状态字段时应视为不存在")
+	}
+}
+
+// TestExternalStockRelistDiagnosticKeepsStatusCode 验证上架回执只保留状态码，已在售时标记为空操作。
+func TestExternalStockRelistDiagnosticKeepsStatusCode(t *testing.T) {
+	// applied 是真机在售码的回执。
+	applied := externalStockApplyFromRelist(&mtop.ItemRelistResult{RawStatus: "1", AlreadyOnSale: true})
+	if !applied.Noop || applied.ListingState != itemapp.ListingOnSale || applied.Diagnostic != "editDetail itemStatus=1；已在售，未提交编辑" {
+		t.Fatalf("在售回执异常: %+v", applied)
+	}
+	// unknown 是未识别状态码仍要上架时的回执。
+	unknown := externalStockApplyFromRelist(&mtop.ItemRelistResult{RawStatus: "9"})
+	if unknown.Noop || unknown.ListingState != itemapp.ListingUnknown || unknown.Diagnostic == "" {
+		t.Fatalf("未知状态回执异常: %+v", unknown)
+	}
+}
+
+// TestDownShelfAlreadyOffIsIdempotent 验证只有明确的已下架回执算成功，其他失败仍要退避。
+func TestDownShelfAlreadyOffIsIdempotent(t *testing.T) {
+	if !downShelfAlreadyOff(errors.New("FAIL_BIZ_ITEM_NOT_ONLINE::商品已下架")) {
+		t.Fatal("已下架应视为成功")
+	}
+	if downShelfAlreadyOff(errors.New("RGV587_ERROR::请进行安全验证")) || redactDownShelfMessage("cookie=secret") != "downshelf 已确认" {
+		t.Fatal("风控和凭证文本不能当成已下架")
 	}
 }

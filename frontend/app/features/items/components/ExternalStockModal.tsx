@@ -55,11 +55,10 @@ export const ExternalStockModal: React.FC<ExternalStockModalProps> = ({ item, op
             <label>Cron<input aria-label="调度表达式" className="mt-1 w-full rounded-lg border px-3 py-2" value={config.cron} onChange={/* cronChange 更新调度表达式。 */ event => update({ cron: event.target.value })} /></label>
             <label>时区<input aria-label="时区" className="mt-1 w-full rounded-lg border px-3 py-2" value={config.timezone} onChange={/* zoneChange 更新时区。 */ event => update({ timezone: event.target.value })} /></label>
             <label>周期（分钟，0 关闭）<input aria-label="周期分钟" type="number" min={0} className="mt-1 w-full rounded-lg border px-3 py-2" value={config.intervalMinutes} onChange={/* intervalChange 更新周期间隔。 */ event => update({ intervalMinutes: Number(event.target.value) })} /></label>
-            <label>库存上限<input aria-label="库存上限" type="number" min={1} className="mt-1 w-full rounded-lg border px-3 py-2" value={config.stockCap} onChange={/* capChange 更新同步上限。 */ event => update({ stockCap: Number(event.target.value) })} /></label>
           </div>
           <label className="block">User-Agent（留空使用桌面浏览器）<input aria-label="User-Agent" className="mt-1 w-full rounded-lg border px-3 py-2" value={config.userAgent} onChange={/* agentChange 更新自定义 User-Agent。 */ event => update({ userAgent: event.target.value })} /></label>
           <label className="flex items-center gap-2"><input type="checkbox" checked={config.dryRun} onChange={/* dryChange 切换演练模式。 */ event => update({ dryRun: event.target.checked })} />演练模式（只记录将要执行的动作）</label>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={config.syncPlatformStock} onChange={/* syncChange 切换是否同步平台库存。 */ event => update({ syncPlatformStock: event.target.checked })} />上架时同步平台库存</label>
+          <p className="text-xs text-gray-500">可用数大于 0 时重新上架原商品，小于等于 0 时下架。已在售时不提交编辑，不改价格、库存和描述。同一天相同可用数会跳过闲鱼请求，到达 cron 或点击立即检查会再执行一次。</p>
           <div>
             <div className="mb-1 font-bold">请求头（已保存的值不会回显）</div>
             {editor.headers.map(/* header 是一条请求头草稿；index 是它在列表中的位置。 */ (header, index) => (

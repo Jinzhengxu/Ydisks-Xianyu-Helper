@@ -91,6 +91,9 @@ func (repository *externalStockRepoFake) SaveStatus(_ context.Context, _, _ stri
 	repository.config.LastError = config.LastError
 	repository.config.BackoffUntil = config.BackoffUntil
 	repository.config.BackoffClass = config.BackoffClass
+	repository.config.AppliedAction = config.AppliedAction
+	repository.config.AppliedAvailable = config.AppliedAvailable
+	repository.config.AppliedAt = config.AppliedAt
 	return nil
 }
 
@@ -140,6 +143,10 @@ type externalStockPlatformFake struct {
 	actionErr error
 	// inspects、unpublishes、relists、syncs 分别是各类平台调用次数。
 	inspects, unpublishes, relists, syncs int
+	// diagnostic 是成功回执里的脱敏说明。
+	diagnostic string
+	// noop 表示平台报告商品已经处于目标状态。
+	noop bool
 }
 
 // Inspect 返回预设状态并计数。
@@ -151,22 +158,26 @@ func (platform *externalStockPlatformFake) Inspect(context.Context, int64, strin
 }
 
 // Unpublish 记录下架。
-func (platform *externalStockPlatformFake) Unpublish(context.Context, int64, string, string) error {
+func (platform *externalStockPlatformFake) Unpublish(context.Context, int64, string, string) (ExternalStockApplyResult, error) {
 	platform.mu.Lock()
 	defer platform.mu.Unlock()
 	platform.unpublishes++
-	if platform.actionErr == nil {
-		platform.listing.State = ListingOffSale
+	if platform.actionErr != nil {
+		return ExternalStockApplyResult{}, platform.actionErr
 	}
-	return platform.actionErr
+	platform.listing.State = ListingOffSale
+	return ExternalStockApplyResult{Diagnostic: platform.diagnostic, ListingState: ListingOffSale, Noop: platform.noop}, nil
 }
 
 // Relist 记录重新上架。
-func (platform *externalStockPlatformFake) Relist(context.Context, int64, string, string, int, bool) error {
+func (platform *externalStockPlatformFake) Relist(context.Context, int64, string, string) (ExternalStockApplyResult, error) {
 	platform.mu.Lock()
 	defer platform.mu.Unlock()
 	platform.relists++
-	return platform.actionErr
+	if platform.actionErr != nil {
+		return ExternalStockApplyResult{}, platform.actionErr
+	}
+	return ExternalStockApplyResult{Diagnostic: platform.diagnostic, ListingState: platform.listing.State, Noop: platform.noop}, nil
 }
 
 // SyncStock 记录改库存。
@@ -234,14 +245,14 @@ func TestExternalStockCheckUnpublishesAndSkipsAutoRelistWindow(t *testing.T) {
 	}
 }
 
-// TestExternalStockDoesNotRelistAtZeroAndStopsOnRisk 验证库存恢复才上架，风控时停止并退避。
+// TestExternalStockDoesNotRelistAtZeroAndStopsOnRisk 验证库存为 0 时只下架，恢复后上架遇风控则停止并退避。
 func TestExternalStockDoesNotRelistAtZeroAndStopsOnRisk(t *testing.T) {
-	// service、repo、platform、_ 是已下架且库存为 0 的夹具。
-	service, repo, _, platform, _ := newExternalStockFixture(t, 0, ListingSnapshot{State: ListingOffSale, Quantity: 0, QuantityKnown: true})
+	// service、repo、platform、_ 是库存为 0 的夹具，不提供在售状态。
+	service, repo, _, platform, _ := newExternalStockFixture(t, 0, ListingSnapshot{})
 	// idle 是库存为 0 时的结果。
 	idle, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "schedule"})
-	if err != nil || idle.Action != ExternalStockActionNone || platform.relists != 0 || platform.unpublishes != 0 {
-		t.Fatalf("零库存不应上架 result=%+v err=%v", idle, err)
+	if err != nil || idle.Action != ExternalStockActionUnpublish || platform.relists != 0 || platform.unpublishes != 1 {
+		t.Fatalf("零库存应下架且不上架 result=%+v err=%v", idle, err)
 	}
 	repo.mu.Lock()
 	repo.config.LastChecked = time.Time{}
@@ -249,10 +260,7 @@ func TestExternalStockDoesNotRelistAtZeroAndStopsOnRisk(t *testing.T) {
 	service.mu.Lock()
 	delete(service.recent, "acc\x00item")
 	service.mu.Unlock()
-	platform.listing = ListingSnapshot{State: ListingOffSale, Quantity: 0, QuantityKnown: true}
 	platform.actionErr = ErrExternalStockRisk
-	// reader 通过夹具字段改为有库存。需要拿到 reader。
-	_ = repo
 	// restored 改用新的读取器。
 	service.reader = &externalStockReaderFake{available: 1}
 	// risky 是上架被风控拒绝的结果。
@@ -281,29 +289,66 @@ func TestExternalStockFetchFailureDoesNotTouchPlatform(t *testing.T) {
 	}
 }
 
-// TestExternalStockUsesLiveEditStatusAndLocalFallback 验证 itemStatus=1 视为在售，无法识别时改用本地同步的在售记录。
-func TestExternalStockUsesLiveEditStatusAndLocalFallback(t *testing.T) {
-	// service、_、_、platform、_ 是外部库存为 1、编辑详情返回真机在售码的夹具。
-	service, repo, _, platform, _ := newExternalStockFixture(t, 1, ListingSnapshot{State: ListingOnSale, Quantity: 1, QuantityKnown: true, RawStatus: "1", Source: "editDetail"})
-	// live 是在售商品的演练结果。
-	live, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "manual", ForceDryRun: true, BypassBackoff: true})
-	if err != nil || live.Action != ExternalStockActionNone || live.ListingState != ListingOnSale || !strings.Contains(live.Message, "itemStatus=1") {
-		t.Fatalf("在售码 1 不应停止: %+v err=%v", live, err)
+// TestExternalStockRelistsWithoutListingState 验证未知在售状态不会停止，平台回执里的状态码会写进说明。
+func TestExternalStockRelistsWithoutListingState(t *testing.T) {
+	// service、repo、_、platform、_ 是外部库存为 1、平台回执带真机在售码的夹具。
+	service, repo, _, platform, _ := newExternalStockFixture(t, 1, ListingSnapshot{State: ListingUnknown})
+	platform.diagnostic = "editDetail itemStatus=1；已在售，未提交编辑"
+	platform.noop = true
+	// live 是不先确认在售状态的正式检查。
+	live, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "manual", BypassBackoff: true})
+	if err != nil || live.Action != ExternalStockActionRelist || live.Status != "ok" || live.Status == "backed_off" || platform.relists != 1 || platform.inspects != 0 || !strings.Contains(live.Message, "itemStatus=1") {
+		t.Fatalf("未知状态仍应上架: %+v err=%v inspect=%d", live, err, platform.inspects)
 	}
 	repo.mu.Lock()
-	repo.config.LastChecked = time.Time{}
-	repo.localStatus = 0
-	repo.localPresent = true
+	// applied 是成功后记住的目标状态。
+	applied := repo.config.AppliedAction
 	repo.mu.Unlock()
+	if applied != ExternalStockActionRelist {
+		t.Fatalf("应记住成功的上架 applied=%s", applied)
+	}
+}
+
+// TestExternalStockSkipsRepeatUntilChangeCronOrManual 验证同一天相同库存跳过平台，变化、cron 和手动检查会再执行。
+func TestExternalStockSkipsRepeatUntilChangeCronOrManual(t *testing.T) {
+	// service、repo、reader、platform、_ 是已经成功上架过的夹具。
+	service, repo, reader, platform, _ := newExternalStockFixture(t, 1, ListingSnapshot{})
+	platform.diagnostic = "editDetail itemStatus=1；已在售，未提交编辑"
+	// first 是第一次上架。
+	first, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "delivery"})
+	if err != nil || first.Action != ExternalStockActionRelist || platform.relists != 1 {
+		t.Fatalf("首次应上架: %+v err=%v", first, err)
+	}
 	service.mu.Lock()
 	delete(service.recent, "acc\x00item")
 	service.mu.Unlock()
-	platform.listing = ListingSnapshot{State: ListingUnknown, Quantity: 1, QuantityKnown: true, RawStatus: "9", Source: "editDetail"}
-	// fallback 是编辑详情状态码未知、本地同步为在售时的结果。
-	fallback, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "manual", ForceDryRun: true, BypassBackoff: true})
-	if err != nil || fallback.Action != ExternalStockActionNone || fallback.ListingState != ListingOnSale || !strings.Contains(fallback.Message, "item_status=0") {
-		t.Fatalf("应改用本地在售状态: %+v err=%v", fallback, err)
+	// repeated 是发货后的重复检查，库存没变。
+	repeated, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "delivery"})
+	if err != nil || repeated.Action != ExternalStockActionNone || platform.relists != 1 || !strings.Contains(repeated.Message, "已跳过") {
+		t.Fatalf("相同库存应跳过: %+v err=%v relist=%d", repeated, err, platform.relists)
 	}
+	service.mu.Lock()
+	delete(service.recent, "acc\x00item")
+	service.mu.Unlock()
+	reader.available = 0
+	// emptied 是可用数变为 0 后的下架。
+	emptied, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "delivery"})
+	if err != nil || emptied.Action != ExternalStockActionUnpublish || platform.unpublishes != 1 || platform.relists != 1 {
+		t.Fatalf("库存变 0 应下架: %+v err=%v", emptied, err)
+	}
+	service.mu.Lock()
+	delete(service.recent, "acc\x00item")
+	service.mu.Unlock()
+	// cron 即使库存相同也再执行一次。
+	cronned, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "schedule", CronMatch: true})
+	if err != nil || cronned.Action != ExternalStockActionUnpublish || platform.unpublishes != 2 {
+		t.Fatalf("cron 应重新下架: %+v err=%v unpublish=%d", cronned, err, platform.unpublishes)
+	}
+	repo.mu.Lock()
+	if repo.config.AppliedAction != ExternalStockActionUnpublish || repo.config.AppliedAvailable == nil || *repo.config.AppliedAvailable != 0 {
+		t.Fatalf("成功状态未记住: %+v", repo.config)
+	}
+	repo.mu.Unlock()
 }
 
 // TestBackedOffExternalStockDoesNotDelayDelivery 验证退避中的库存检查在发货回调里立即返回，并且不读取平台。

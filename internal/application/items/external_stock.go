@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -66,12 +65,20 @@ type ExternalStockConfig struct {
 	BackoffUntil time.Time
 	// BackoffClass 是 all 或 relist。
 	BackoffClass string
+	// AppliedAction 是最近一次真正成功的下架或重新上架。演练和跳过不更新它。
+	AppliedAction string
+	// AppliedAvailable 是那次成功时的外部可用库存。
+	AppliedAvailable *int
+	// AppliedAt 是那次成功的时间，用来判断是否仍在同一个配置日。
+	AppliedAt time.Time
 }
 
 // ExternalStockCheckOptions 描述一次检查的触发来源。
 type ExternalStockCheckOptions struct {
 	// Trigger 是 manual、schedule 或 delivery。
 	Trigger string
+	// CronMatch 表示这次调度正好命中 cron，相同库存也要重新执行一次。
+	CronMatch bool
 	// ForceDryRun 让这一次只演练，不改变已保存的演练开关。
 	ForceDryRun bool
 	// BypassBackoff 允许手动检查越过退避；失败后仍会重新退避。
@@ -138,15 +145,25 @@ type ExternalStockRead struct {
 	UserAgent string
 }
 
-// ExternalStockPlatform 是闲鱼在售状态读取和原商品上下架的最小端口。
+// ExternalStockApplyResult 是一次下架或重新上架的非秘密回执。
+type ExternalStockApplyResult struct {
+	// Diagnostic 是脱敏后的平台状态说明，不含 Cookie、请求头或响应正文。
+	Diagnostic string
+	// ListingState 是回执里看到的在售状态；未知时调用方仍然不得因此停止。
+	ListingState string
+	// Noop 表示商品已经处于目标状态，没有提交会改内容的编辑。
+	Noop bool
+}
+
+// ExternalStockPlatform 是原商品下架和重新上架的最小端口。动作本身必须幂等，不能另建商品。
 type ExternalStockPlatform interface {
-	// Inspect 读取当前在售状态和库存，不修改商品。
+	// Inspect 读取当前在售状态和库存，不修改商品。决策不再依赖它。
 	Inspect(context.Context, int64, string, string) (ListingSnapshot, error)
-	// Unpublish 下架原商品。
-	Unpublish(context.Context, int64, string, string) error
-	// Relist 重新上架原商品。sync 为真时把单规格库存设为 quantity，否则沿用既有最小库存补回。
-	Relist(context.Context, int64, string, string, int, bool) error
-	// SyncStock 在商品已在售时把单规格库存改为 quantity。
+	// Unpublish 下架原商品。商品已经不在售时返回成功。
+	Unpublish(context.Context, int64, string, string) (ExternalStockApplyResult, error)
+	// Relist 重新上架同一个原商品。已经在售时不提交编辑。
+	Relist(context.Context, int64, string, string) (ExternalStockApplyResult, error)
+	// SyncStock 保留给端口兼容；外部库存的目标状态动作不会改写平台库存。
 	SyncStock(context.Context, int64, string, string, int) error
 }
 
@@ -310,7 +327,7 @@ func (service *ExternalStockService) Check(ctx context.Context, userID int64, co
 		}
 	}
 	// result、err 是本次独占执行的结果。
-	result, err := service.checkLocked(ctx, userID, cookie, item, options)
+	result, err := service.checkLocked(ctx, cookie, item, options)
 	if err == nil {
 		service.mu.Lock()
 		service.recent[cookie+"\x00"+item] = externalStockRecent{at: time.Now(), result: result}
@@ -441,7 +458,7 @@ func (service *ExternalStockService) runDue(ctx context.Context) {
 		// checkCtx 使用后台节流，并给单次检查留出外部超时和两次平台调用的时间。
 		checkCtx, cancel := context.WithTimeout(WithExternalStockBackground(ctx), config.Timeout+2*time.Minute)
 		// checkErr 是本轮该商品检查失败的原因；调度取消时停止继续挑选。
-		_, checkErr := service.Check(checkCtx, 0, config.CookieID, config.ItemID, ExternalStockCheckOptions{Trigger: "schedule"})
+		_, checkErr := service.Check(checkCtx, 0, config.CookieID, config.ItemID, ExternalStockCheckOptions{Trigger: "schedule", CronMatch: ExternalStockCronHit(config.Cron, config.Timezone, now)})
 		cancel()
 		if checkErr != nil && ctx.Err() != nil {
 			return
@@ -477,8 +494,8 @@ func (service *ExternalStockService) deliveryCheck(account, item, orderID string
 	service.logger.Info("外部库存发货后检查完成", "account", account, "item_id", item, "order_id", orderID, "action", result.Action, "status", result.Status)
 }
 
-// checkLocked 在已持有商品锁时执行一次完整检查。
-func (service *ExternalStockService) checkLocked(ctx context.Context, userID int64, cookieID, itemID string, options ExternalStockCheckOptions) (ExternalStockCheckResult, error) {
+// checkLocked 在已持有商品锁时执行一次完整检查。它不先读取在售状态。
+func (service *ExternalStockService) checkLocked(ctx context.Context, cookieID, itemID string, options ExternalStockCheckOptions) (ExternalStockCheckResult, error) {
 	// config、err 是不含请求头明文的当前配置。
 	config, err := service.repository.Get(ctx, cookieID, itemID)
 	if err != nil {
@@ -487,7 +504,7 @@ func (service *ExternalStockService) checkLocked(ctx context.Context, userID int
 	if !config.Enabled {
 		return ExternalStockCheckResult{}, ErrExternalStockDisabled
 	}
-	// now 是本次检查开始时间，用于判断退避。
+	// now 是本次检查开始时间，用于判断退避和是否同一天。
 	now := time.Now()
 	if !options.BypassBackoff && config.BackoffClass == ExternalStockBackoffAll && now.Before(config.BackoffUntil) {
 		// skipped 记录仍在退避中，不访问外部接口和平台。
@@ -505,99 +522,30 @@ func (service *ExternalStockService) checkLocked(ctx context.Context, userID int
 		UserAgent: NormalizeExternalStockUserAgent(config.UserAgent),
 	})
 	if readErr != nil {
-		return service.finish(ctx, config, ExternalStockCheckResult{}, nil, ExternalStockDecision{
+		return service.finish(ctx, config, ExternalStockCheckResult{}, ExternalStockDecision{
 			Action: ExternalStockActionStop, Reason: safeExternalStockError(readErr), BackoffClass: ExternalStockBackoffAll,
 		}, options)
 	}
-	if err = service.paceAccount(ctx, cookieID); err != nil {
-		return ExternalStockCheckResult{}, err
-	}
-	// listing、inspectErr 是网页编辑详情里的在售状态；虚拟商品的状态码可能不是模拟器使用的 0。
-	listing, inspectErr := service.platform.Inspect(ctx, userID, cookieID, itemID)
 	// count 是本次成功读到的可用库存副本，供状态保存。
 	count := available
-	// diagnostic 是编辑详情和本地同步状态的脱敏说明。
-	var diagnostic string
-	listing, diagnostic, inspectErr = service.withLocalListingFallback(ctx, cookieID, itemID, listing, inspectErr)
-	if inspectErr != nil {
-		if errors.Is(inspectErr, ErrExternalStockEditUnsupported) && available <= 0 && (options.BypassBackoff || config.BackoffClass != ExternalStockBackoffAll || !now.Before(config.BackoffUntil)) {
-			// outcome 是无法确认在售时仍尝试一次下架的结果。
-			return service.unpublishWithoutListing(ctx, userID, config, count, options, diagnostic)
-		}
-		// class 是这次读取失败对应的退避类别。
-		class := ExternalStockBackoffAll
-		if errors.Is(inspectErr, ErrExternalStockEditUnsupported) || errors.Is(inspectErr, ErrExternalStockMultiSpec) {
-			class = ExternalStockBackoffRelist
-		}
-		return service.finish(ctx, config, ExternalStockCheckResult{Available: &count, ListingState: listing.State}, &listing, ExternalStockDecision{
-			Action: ExternalStockActionStop, Reason: annotateListingReason(safeExternalStockError(inspectErr), diagnostic), BackoffClass: class,
-		}, options)
-	}
 	// dryRun 合并保存的演练开关和本次强制演练。
 	dryRun := config.DryRun || options.ForceDryRun
-	if !options.BypassBackoff && config.BackoffClass == ExternalStockBackoffRelist && now.Before(config.BackoffUntil) {
-		// provisional 是忽略上架限制时的决策，用来判断这次是不是只需要下架。
-		provisional := DecideExternalStock(available, listing, dryRun, config.SyncPlatformStock, config.StockCap)
-		if provisional.Action != ExternalStockActionUnpublish {
-			return service.finish(ctx, config, ExternalStockCheckResult{Available: &count, ListingState: listing.State}, &listing, ExternalStockDecision{
-				Action: ExternalStockActionStop, Reason: "网页编辑仍在退避，已跳过上架和改库存", BackoffClass: ExternalStockBackoffRelist,
-			}, options)
-		}
+	// decision 只由外部可用库存决定下架或重新上架。
+	decision := DecideExternalStock(available, dryRun)
+	if decision.Action == ExternalStockActionRelist && !options.BypassBackoff && config.BackoffClass == ExternalStockBackoffRelist && now.Before(config.BackoffUntil) {
+		return service.finish(ctx, config, ExternalStockCheckResult{Available: &count}, ExternalStockDecision{
+			Action: ExternalStockActionStop, Reason: "网页编辑仍在退避，已跳过重新上架", BackoffClass: ExternalStockBackoffRelist,
+		}, options)
 	}
-	// decision 是根据最新外部库存和平台状态得出的动作。
-	decision := DecideExternalStock(available, listing, dryRun, config.SyncPlatformStock, config.StockCap)
-	decision.Reason = annotateListingReason(decision.Reason, diagnostic)
-	return service.finish(ctx, config, ExternalStockCheckResult{Available: &count, ListingState: listing.State}, &listing, decision, options)
+	if options.Trigger != "manual" && !options.CronMatch && SameDesiredStockApplied(decision.Action, available, config.AppliedAction, config.AppliedAvailable, config.AppliedAt, now, config.Timezone) {
+		decision.Action = ExternalStockActionNone
+		decision.Reason = "今天相同可用库存已成功处理，已跳过平台请求"
+		decision.BackoffClass = ""
+	}
+	return service.finish(ctx, config, ExternalStockCheckResult{Available: &count}, decision, options)
 }
 
-// withLocalListingFallback 在编辑详情没有给出可识别状态时读取本地同步的 item_status。
-// 风控、5xx 和会话失效不使用本地状态做决定，避免用旧列表继续请求平台。
-func (service *ExternalStockService) withLocalListingFallback(ctx context.Context, cookieID, itemID string, listing ListingSnapshot, inspectErr error) (ListingSnapshot, string, error) {
-	// editNote 是编辑详情的脱敏诊断。
-	editNote := "editDetail 未返回"
-	if inspectErr == nil {
-		// raw 是原始 itemStatus；空字符串显示为“空”。
-		raw := listing.RawStatus
-		if raw == "" {
-			raw = "空"
-		}
-		editNote = "editDetail itemStatus=" + raw
-	} else if errors.Is(inspectErr, ErrExternalStockEditUnsupported) {
-		editNote = "editDetail 不支持网页编辑"
-	} else {
-		return listing, editNote + " " + safeExternalStockError(inspectErr), inspectErr
-	}
-	if inspectErr == nil && listing.State != ListingUnknown && listing.State != "" {
-		if listing.Source == "" {
-			listing.Source = "editDetail"
-		}
-		return listing, editNote, nil
-	}
-	// status、present、localErr 是本地同步状态、字段是否存在和读取错误。
-	status, present, localErr := service.repository.LocalItemStatus(ctx, cookieID, itemID)
-	// localNote 说明本地来源的结果，不包含商品详情正文。
-	localNote := "本地 item_status=缺失"
-	if localErr != nil {
-		localNote = "本地 item_status=读取失败"
-	} else if present {
-		localNote = "本地 item_status=" + strconv.Itoa(status)
-	}
-	// diagnostic 是两条来源的合并说明。
-	diagnostic := editNote + "；" + localNote
-	// localState、known 是本地状态能否安全当成在售。
-	localState, known := ClassifyLocalItemStatus(status, present && localErr == nil)
-	if !known {
-		return listing, diagnostic, inspectErr
-	}
-	listing.State = localState
-	listing.Source = "local_item_detail"
-	if listing.RawStatus == "" {
-		listing.RawStatus = strconv.Itoa(status)
-	}
-	return listing, diagnostic, nil
-}
-
-// annotateListingReason 把脱敏诊断附在状态说明后面，方便下一次演练直接看到来源。
+// annotateListingReason 把脱敏诊断附在状态说明后面，方便下一次检查直接看到来源。
 func annotateListingReason(reason, diagnostic string) string {
 	if diagnostic == "" {
 		return reason
@@ -610,17 +558,8 @@ func annotateListingReason(reason, diagnostic string) string {
 	return text
 }
 
-// unpublishWithoutListing 在网页编辑详情不可用、但外部库存已为 0 时，只尝试一次专用下架接口。
-func (service *ExternalStockService) unpublishWithoutListing(ctx context.Context, userID int64, config ExternalStockConfig, available int, options ExternalStockCheckOptions, diagnostic string) (ExternalStockCheckResult, error) {
-	// count 是本次可用库存。
-	count := available
-	// decision 是下架或演练下架，并附上脱敏诊断。
-	decision := ExternalStockDecision{Action: ExternalStockActionUnpublish, DryRun: config.DryRun || options.ForceDryRun, Reason: annotateListingReason("外部库存为 0，网页编辑不可用，尝试专用下架接口", diagnostic)}
-	return service.finish(ctx, config, ExternalStockCheckResult{Available: &count, ListingState: ListingUnknown}, nil, decision, options)
-}
-
 // finish 按决策执行最多一次平台写操作，并保存可展示状态。
-func (service *ExternalStockService) finish(ctx context.Context, config ExternalStockConfig, partial ExternalStockCheckResult, listing *ListingSnapshot, decision ExternalStockDecision, options ExternalStockCheckOptions) (ExternalStockCheckResult, error) {
+func (service *ExternalStockService) finish(ctx context.Context, config ExternalStockConfig, partial ExternalStockCheckResult, decision ExternalStockDecision, options ExternalStockCheckOptions) (ExternalStockCheckResult, error) {
 	// result 是最终返回给调用方的非秘密结果。
 	result := partial
 	result.Action = decision.Action
@@ -655,18 +594,18 @@ func (service *ExternalStockService) finish(ctx context.Context, config External
 	}
 	// actionErr 是唯一一次平台写操作的失败。
 	var actionErr error
+	// applied 是平台回执；失败时不采用其中的状态。
+	var applied ExternalStockApplyResult
 	switch decision.Action {
 	case ExternalStockActionUnpublish:
-		actionErr = service.platform.Unpublish(ctx, userID, config.CookieID, config.ItemID)
+		applied, actionErr = service.platform.Unpublish(ctx, userID, config.CookieID, config.ItemID)
 	case ExternalStockActionRelist:
-		actionErr = service.platform.Relist(ctx, userID, config.CookieID, config.ItemID, decision.Quantity, decision.Sync)
-	case ExternalStockActionSyncStock:
-		actionErr = service.platform.SyncStock(ctx, userID, config.CookieID, config.ItemID, decision.Quantity)
+		applied, actionErr = service.platform.Relist(ctx, userID, config.CookieID, config.ItemID)
 	default:
 		actionErr = ErrExternalStockUnknownState
 	}
 	if actionErr != nil {
-		// class 是写操作失败后的退避类别。
+		// class 是写操作失败后的退避类别。在售状态未知不会进入这里。
 		class := ExternalStockBackoffAll
 		if errors.Is(actionErr, ErrExternalStockEditUnsupported) || errors.Is(actionErr, ErrExternalStockMultiSpec) {
 			class = ExternalStockBackoffRelist
@@ -678,8 +617,9 @@ func (service *ExternalStockService) finish(ctx context.Context, config External
 		return service.persist(ctx, config, result, class)
 	}
 	result.Status = "ok"
-	service.logger.InfoContext(ctx, "外部库存已同步商品状态", "account", config.CookieID, "item_id", config.ItemID, "trigger", options.Trigger, "action", decision.Action, "quantity", decision.Quantity)
-	_ = listing
+	result.ListingState = applied.ListingState
+	result.Message = annotateListingReason(decision.Reason, applied.Diagnostic)
+	service.logger.InfoContext(ctx, "外部库存已同步商品状态", "account", config.CookieID, "item_id", config.ItemID, "trigger", options.Trigger, "action", decision.Action, "noop", applied.Noop)
 	return service.persist(ctx, config, result, "")
 }
 
@@ -695,6 +635,11 @@ func (service *ExternalStockService) persist(ctx context.Context, config Externa
 	status.LastError = result.Message
 	status.BackoffClass = ""
 	status.BackoffUntil = time.Time{}
+	if result.Status == "ok" && (result.Action == ExternalStockActionRelist || result.Action == ExternalStockActionUnpublish) {
+		status.AppliedAction = result.Action
+		status.AppliedAvailable = result.Available
+		status.AppliedAt = status.LastChecked
+	}
 	if backoffClass != "" && result.Status != "ok" && result.Status != "dry_run" {
 		status.BackoffClass = backoffClass
 		status.BackoffUntil = status.LastChecked.Add(ExternalStockBackoff)

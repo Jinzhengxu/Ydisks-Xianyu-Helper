@@ -155,63 +155,51 @@ type ExternalStockDecision struct {
 	BackoffClass string
 }
 
-// DecideExternalStock 根据外部可用库存和当前在售状态决定下一步。
-// available 小于 0 视为无效读数。dryRun 不改变动作种类，只标记不要写平台。
-// 外部库存小于等于 0 时永远不会重新上架。状态未知时停止，不猜测。
-func DecideExternalStock(available int, listing ListingSnapshot, dryRun, syncStock bool, stockCap int) ExternalStockDecision {
-	// decision 是默认停止结果，只有明确分支才会改成可执行动作。
-	decision := ExternalStockDecision{Action: ExternalStockActionStop, DryRun: dryRun, Reason: "无法确认商品在售状态", BackoffClass: ExternalStockBackoffAll}
-	if available < 0 || listing.State == ListingUnknown || listing.State == "" {
-		return decision
-	}
-	// cap 是同步到平台时允许的最大库存，至少为 1，至多为发布页上限。
-	cap := stockCap
-	if cap < 1 {
-		cap = 1
-	}
-	if cap > StockMax {
-		cap = StockMax
+// DecideExternalStock 只根据外部可用库存决定目标状态，不读取也不依赖当前在售状态。
+// available 小于 0 视为无效读数。available 小于等于 0 时只下架，大于 0 时只重新上架原商品。
+// dryRun 不改变动作种类，只标记不要写平台。在售状态未知不会产生停止或退避。
+func DecideExternalStock(available int, dryRun bool) ExternalStockDecision {
+	if available < 0 {
+		return ExternalStockDecision{Action: ExternalStockActionStop, DryRun: dryRun, Reason: "外部可用库存无效", BackoffClass: ExternalStockBackoffAll}
 	}
 	if available <= 0 {
-		if listing.State == ListingOnSale {
-			return ExternalStockDecision{Action: ExternalStockActionUnpublish, DryRun: dryRun, Reason: "外部可用库存为 0，下架原商品"}
-		}
-		return ExternalStockDecision{Action: ExternalStockActionNone, DryRun: dryRun, Reason: "外部可用库存为 0 且商品已下架，不重新上架"}
+		return ExternalStockDecision{Action: ExternalStockActionUnpublish, DryRun: dryRun, Reason: "外部可用库存为 0，下架原商品"}
 	}
-	// target 是同步开启时要写入的平台库存，不超过配置上限。
-	target := available
-	if target > cap {
-		target = cap
+	return ExternalStockDecision{Action: ExternalStockActionRelist, DryRun: dryRun, Reason: "外部可用库存大于 0，重新上架原商品"}
+}
+
+// SameDesiredStockApplied 判断今天是否已经成功执行过相同动作和相同可用库存。
+// 调用方仍会在 cron 和手动检查时重新执行。时区无法加载时不把记录当成已成功，避免漏做。
+func SameDesiredStockApplied(action string, available int, appliedAction string, appliedAvailable *int, appliedAt, now time.Time, timezone string) bool {
+	if action != ExternalStockActionRelist && action != ExternalStockActionUnpublish {
+		return false
 	}
-	if listing.State == ListingOffSale {
-		if syncStock && listing.MultiSpec {
-			return ExternalStockDecision{Action: ExternalStockActionStop, DryRun: dryRun, Reason: "多规格商品不能按单一外部库存重新上架并改写规格库存", BackoffClass: ExternalStockBackoffRelist}
-		}
-		// relist 在未开启同步时不指定数量，沿用既有重新上架对售罄商品补最小库存的行为。
-		relist := ExternalStockDecision{Action: ExternalStockActionRelist, DryRun: dryRun, Reason: "外部可用库存大于 0 且商品已下架，重新上架原商品"}
-		if syncStock {
-			relist.Quantity = target
-			relist.Sync = true
-			relist.Reason = "外部可用库存大于 0，重新上架原商品并同步库存"
-		}
-		return relist
+	if appliedAction != action || appliedAvailable == nil || *appliedAvailable != available || appliedAt.IsZero() {
+		return false
 	}
-	if listing.State != ListingOnSale {
-		return decision
+	// location、err 是配置时区；加载失败时不跳过。
+	location, err := time.LoadLocation(strings.TrimSpace(timezone))
+	if err != nil {
+		return false
 	}
-	if !syncStock {
-		return ExternalStockDecision{Action: ExternalStockActionNone, DryRun: dryRun, Reason: "商品已在售且未要求同步平台库存"}
+	// appliedLocal 是上次成功在配置时区中的时间。
+	appliedLocal := appliedAt.In(location)
+	// current 是本次检查在同一时区中的时间。
+	current := now.In(location)
+	return appliedLocal.Year() == current.Year() && appliedLocal.YearDay() == current.YearDay()
+}
+
+// ExternalStockCronHit 判断 now 在配置时区是否命中 cron 的这一分钟。表达式无效时不算命中。
+func ExternalStockCronHit(cronExpr, timezone string, now time.Time) bool {
+	if ValidateExternalStockCron(cronExpr) != nil {
+		return false
 	}
-	if listing.MultiSpec {
-		return ExternalStockDecision{Action: ExternalStockActionStop, DryRun: dryRun, Reason: "多规格商品不能按单一外部库存改写规格库存", BackoffClass: ExternalStockBackoffRelist}
+	// location、err 是配置时区。
+	location, err := time.LoadLocation(strings.TrimSpace(timezone))
+	if err != nil {
+		return false
 	}
-	if !listing.QuantityKnown {
-		return ExternalStockDecision{Action: ExternalStockActionStop, DryRun: dryRun, Reason: "已在售但没能读到当前库存，停止改库存", BackoffClass: ExternalStockBackoffAll}
-	}
-	if listing.Quantity == target {
-		return ExternalStockDecision{Action: ExternalStockActionNone, DryRun: dryRun, Reason: "商品已在售且平台库存已与外部可用数一致"}
-	}
-	return ExternalStockDecision{Action: ExternalStockActionSyncStock, DryRun: dryRun, Quantity: target, Sync: true, Reason: "商品已在售，将平台库存同步为外部可用数"}
+	return CronMatches(cronExpr, now.In(location))
 }
 
 // ParseAvailableCount 从 JSON 正文按点分路径读取非负整数。

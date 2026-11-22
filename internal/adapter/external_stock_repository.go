@@ -183,13 +183,16 @@ func externalStockConfigFromRow(row db.ItemExternalStockRow) itemapp.ExternalSto
 		Cron: row.CronExpr, Timezone: row.Timezone, Interval: time.Duration(row.IntervalMinutes) * time.Minute,
 		DryRun: row.DryRun, SyncPlatformStock: row.SyncPlatformStock, StockCap: row.StockCap, HeaderNames: row.HeaderNames,
 		LastAction: row.LastAction, LastStatus: row.LastStatus, LastError: row.LastError, BackoffClass: row.BackoffClass,
-		LastAvailable: row.LastAvailable,
+		LastAvailable: row.LastAvailable, AppliedAction: row.AppliedAction, AppliedAvailable: row.AppliedAvailable,
 	}
 	if row.LastCheckedUnix > 0 {
 		config.LastChecked = time.Unix(row.LastCheckedUnix, 0)
 	}
 	if row.BackoffUntilUnix > 0 {
 		config.BackoffUntil = time.Unix(row.BackoffUntilUnix, 0)
+	}
+	if row.AppliedUnix > 0 {
+		config.AppliedAt = time.Unix(row.AppliedUnix, 0)
 	}
 	return config
 }
@@ -204,12 +207,16 @@ func externalStockRowFromConfig(config itemapp.ExternalStockConfig) db.ItemExter
 		DryRun: config.DryRun, SyncPlatformStock: config.SyncPlatformStock, StockCap: config.StockCap,
 		HeaderNames: config.HeaderNames, LastAvailable: config.LastAvailable, LastAction: config.LastAction,
 		LastStatus: config.LastStatus, LastError: config.LastError, BackoffClass: config.BackoffClass,
+		AppliedAction: config.AppliedAction, AppliedAvailable: config.AppliedAvailable,
 	}
 	if !config.LastChecked.IsZero() {
 		row.LastCheckedUnix = config.LastChecked.Unix()
 	}
 	if !config.BackoffUntil.IsZero() {
 		row.BackoffUntilUnix = config.BackoffUntil.Unix()
+	}
+	if !config.AppliedAt.IsZero() {
+		row.AppliedUnix = config.AppliedAt.Unix()
 	}
 	return row
 }

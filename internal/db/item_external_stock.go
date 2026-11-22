@@ -66,6 +66,12 @@ type ItemExternalStockRow struct {
 	BackoffUntilUnix int64
 	// BackoffClass 是 all、relist 或空。
 	BackoffClass string
+	// AppliedAction 是最近一次真正成功的下架或重新上架。
+	AppliedAction string
+	// AppliedAvailable 是那次成功时的外部可用库存；nil 表示还没有成功记录。
+	AppliedAvailable *int
+	// AppliedUnix 是那次成功的 Unix 秒，0 表示还没有。
+	AppliedUnix int64
 	// Found 表示数据库里已经有独立配置。
 	Found bool
 }
@@ -193,9 +199,14 @@ func (repo *ItemExternalStock) SaveStatus(ctx context.Context, row ItemExternalS
 	if row.LastAvailable != nil {
 		available = *row.LastAvailable
 	}
-	// execResult、execErr 是状态更新结果；没有配置行时不创建。
-	_, execErr := repo.DB.ExecContext(ctx, `UPDATE item_external_stock SET last_checked_unix=?, last_available=?, last_action=?, last_status=?, last_error=?, backoff_until_unix=?, backoff_class=? WHERE cookie_id=? AND item_id=?`,
-		row.LastCheckedUnix, available, row.LastAction, row.LastStatus, row.LastError, row.BackoffUntilUnix, row.BackoffClass, row.CookieID, row.ItemID)
+	// appliedAvailable 是可空的上次成功库存。
+	var appliedAvailable any
+	if row.AppliedAvailable != nil {
+		appliedAvailable = *row.AppliedAvailable
+	}
+	// execErr 是状态更新错误；没有配置行时更新零行，不另建记录。
+	_, execErr := repo.DB.ExecContext(ctx, `UPDATE item_external_stock SET last_checked_unix=?, last_available=?, last_action=?, last_status=?, last_error=?, backoff_until_unix=?, backoff_class=?, applied_action=?, applied_available=?, applied_unix=? WHERE cookie_id=? AND item_id=?`,
+		row.LastCheckedUnix, available, row.LastAction, row.LastStatus, row.LastError, row.BackoffUntilUnix, row.BackoffClass, row.AppliedAction, appliedAvailable, row.AppliedUnix, row.CookieID, row.ItemID)
 	return execErr
 }
 
@@ -227,7 +238,8 @@ func (repo *ItemExternalStock) ListEnabled(ctx context.Context) ([]ItemExternalS
 // externalStockSelectSQL 选出配置列。headers_ciphertext 只在仓储内部解密。
 const externalStockSelectSQL = `SELECT cookie_id, item_id, enabled, source_url, http_method, headers_ciphertext, json_path,
 	timeout_seconds, user_agent, cron_expr, timezone, interval_minutes, dry_run, sync_platform_stock, stock_cap,
-	last_checked_unix, last_available, last_action, last_status, last_error, backoff_until_unix, backoff_class
+	last_checked_unix, last_available, last_action, last_status, last_error, backoff_until_unix, backoff_class,
+	applied_action, applied_available, applied_unix
 	FROM item_external_stock`
 
 // load 读取一行并解密请求头。没有记录时返回 sql.ErrNoRows。
@@ -272,14 +284,15 @@ func scanExternalStock(scanner externalStockScanner) (ItemExternalStockRow, stri
 	var enabled, dryRun, syncStock int
 	// ciphertext 是请求头密文或历史明文。
 	var ciphertext string
-	// available 是可空的上次读数。
-	var available sql.NullInt64
+	// available、appliedAvailable 是可空的上次读数和上次成功库存。
+	var available, appliedAvailable sql.NullInt64
 	// row 是扫描中的非秘密字段。
 	var row ItemExternalStockRow
 	// scanErr 是列扫描错误。
 	scanErr := scanner.Scan(&row.CookieID, &row.ItemID, &enabled, &row.SourceURL, &row.Method, &ciphertext, &row.JSONPath,
 		&row.TimeoutSeconds, &row.UserAgent, &row.CronExpr, &row.Timezone, &row.IntervalMinutes, &dryRun, &syncStock, &row.StockCap,
-		&row.LastCheckedUnix, &available, &row.LastAction, &row.LastStatus, &row.LastError, &row.BackoffUntilUnix, &row.BackoffClass)
+		&row.LastCheckedUnix, &available, &row.LastAction, &row.LastStatus, &row.LastError, &row.BackoffUntilUnix, &row.BackoffClass,
+		&row.AppliedAction, &appliedAvailable, &row.AppliedUnix)
 	if scanErr != nil {
 		return ItemExternalStockRow{}, "", scanErr
 	}
@@ -291,6 +304,11 @@ func scanExternalStock(scanner externalStockScanner) (ItemExternalStockRow, stri
 		// count 是上次可用库存。
 		count := int(available.Int64)
 		row.LastAvailable = &count
+	}
+	if appliedAvailable.Valid {
+		// applied 是上次成功时的可用库存。
+		applied := int(appliedAvailable.Int64)
+		row.AppliedAvailable = &applied
 	}
 	return row, ciphertext, nil
 }
