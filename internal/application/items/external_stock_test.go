@@ -293,11 +293,10 @@ func TestExternalStockFetchFailureDoesNotTouchPlatform(t *testing.T) {
 func TestExternalStockRelistsWithoutListingState(t *testing.T) {
 	// service、repo、_、platform、_ 是外部库存为 1、平台回执带真机在售码的夹具。
 	service, repo, _, platform, _ := newExternalStockFixture(t, 1, ListingSnapshot{State: ListingUnknown})
-	platform.diagnostic = "editDetail itemStatus=1；已在售，未提交编辑"
-	platform.noop = true
+	platform.diagnostic = "platform_outcome=submitted；read_item_status=1；该读数不能证明商品当前在售"
 	// live 是不先确认在售状态的正式检查。
 	live, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "manual", BypassBackoff: true})
-	if err != nil || live.Action != ExternalStockActionRelist || live.Status != "ok" || live.Status == "backed_off" || platform.relists != 1 || platform.inspects != 0 || !strings.Contains(live.Message, "itemStatus=1") {
+	if err != nil || live.Action != ExternalStockActionRelist || live.Status != "ok" || platform.relists != 1 || platform.inspects != 0 || strings.Contains(live.Message, "已在售，未提交编辑") || !strings.Contains(live.Message, "read_item_status=1") {
 		t.Fatalf("未知状态仍应上架: %+v err=%v inspect=%d", live, err, platform.inspects)
 	}
 	repo.mu.Lock()
@@ -313,7 +312,7 @@ func TestExternalStockRelistsWithoutListingState(t *testing.T) {
 func TestExternalStockSkipsRepeatUntilChangeCronOrManual(t *testing.T) {
 	// service、repo、reader、platform、_ 是已经成功上架过的夹具。
 	service, repo, reader, platform, _ := newExternalStockFixture(t, 1, ListingSnapshot{})
-	platform.diagnostic = "editDetail itemStatus=1；已在售，未提交编辑"
+	platform.diagnostic = "platform_outcome=submitted；read_item_status=1"
 	// first 是第一次上架。
 	first, err := service.Check(context.Background(), 7, "acc", "item", ExternalStockCheckOptions{Trigger: "delivery"})
 	if err != nil || first.Action != ExternalStockActionRelist || platform.relists != 1 {

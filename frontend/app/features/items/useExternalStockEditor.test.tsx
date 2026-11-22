@@ -38,7 +38,7 @@ describe('useExternalStockEditor', /* suite 验证读取、保存和演练不会
   test('演练只请求 dry_run，失败状态显示错误', /* checkCase 验证立即演练和失败文案。 */ async () => {
     vi.mocked(getItemExternalStock).mockResolvedValue(config);
     vi.mocked(checkItemExternalStock).mockResolvedValue({
-      action: 'stop', status: 'backed_off', available: 1, message: '该商品不支持网页端编辑或重新上架', dryRun: true, listingState: 'off_sale', config,
+      action: 'stop', status: 'backed_off', available: 1, message: '该商品不支持网页端编辑或重新上架', dryRun: true, listingState: 'unverified', platformOutcome: 'refused', readItemStatus: '', platformRet: 'FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT', config,
     });
     // hook 是已加载配置的编辑器。
     const hook = renderHook(/* renderEditor 渲染外部库存编辑器。 */ () => useExternalStockEditor(item, true));
@@ -53,7 +53,7 @@ describe('useExternalStockEditor', /* suite 验证读取、保存和演练不会
   test('确认后才发送一次真实执行，已保存演练保持开启', /* executeCase 验证执行一次需要确认且不改演练开关。 */ async () => {
     vi.mocked(getItemExternalStock).mockResolvedValue({ ...config, dryRun: true });
     vi.mocked(checkItemExternalStock).mockResolvedValue({
-      action: 'relist', status: 'ok', available: 1, message: '已重新上架', dryRun: false, listingState: 'on_sale', config: { ...config, dryRun: true },
+      action: 'relist', status: 'ok', available: 1, message: '平台已接受编辑', dryRun: false, listingState: 'unverified', platformOutcome: 'submitted', readItemStatus: '1', platformRet: 'SUCCESS', config: { ...config, dryRun: true },
     });
     // hook 是已加载且演练开启的编辑器。
     const hook = renderHook(/* renderEditor 渲染外部库存编辑器。 */ () => useExternalStockEditor(item, true));

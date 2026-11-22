@@ -126,25 +126,43 @@ func TestRelistItemFailures(t *testing.T) {
 	}
 }
 
-// TestEnsureItemOnSaleKeepsExistingListing 验证真机在售码不提交编辑，下架和未知状态只改 itemStatus。
+// TestEnsureItemOnSaleKeepsExistingListing 验证 itemStatus=1 仍要提交编辑，并且不改价格和库存。
 func TestEnsureItemOnSaleKeepsExistingListing(t *testing.T) {
 	// gateway、client、cookie 是独立的平台状态、真实客户端和卖家 Cookie。
 	gateway, client, cookie := newSellerGateway(t)
-	// onSale 是库存和价格都已存在的在售商品，编辑详情返回真机状态码 1。
-	onSale := gateway.AddItemWithStock(sellerID, "在售虚拟商品", "9.90", 4)
-	gateway.SetEditStatus(onSale, "1")
-	// listed、err 是已在售商品的幂等结果。
-	listed, err := client.EnsureItemOnSale(context.Background(), cookie, onSale)
-	if err != nil || !listed.AlreadyOnSale || listed.RawStatus != "1" {
-		t.Fatalf("在售码 1 应直接成功: %+v err=%v", listed, err)
+	// misleading 是 App 可能已下架、但编辑详情仍返回 itemStatus=1 的商品。
+	misleading := gateway.AddItemWithStock(sellerID, "在售虚拟商品", "9.90", 4)
+	gateway.SetOnSale(misleading, false)
+	gateway.SetEditStatus(misleading, "1")
+	// listed、err 是必须实际提交编辑的结果。
+	listed, err := client.EnsureItemOnSale(context.Background(), cookie, misleading)
+	if err != nil || listed.AlreadyOnSale || !listed.Submitted || listed.RawStatus != "1" || listed.PlatformRet == "" {
+		t.Fatalf("itemStatus=1 必须提交编辑: %+v err=%v", listed, err)
 	}
-	if gateway.CallCount(mtopsim.APIItemEdit) != 0 {
-		t.Fatal("已在售不应提交编辑")
+	if gateway.CallCount(mtopsim.APIItemEdit) != 1 {
+		t.Fatal("itemStatus=1 不能不提交编辑")
 	}
-	// kept 是平台侧商品，价格和库存必须保持原值。
-	kept, _ := gateway.Item(onSale)
-	if kept.Quantity != 4 || kept.Price != "9.90" || kept.EditCount != 0 {
-		t.Fatalf("已在售商品被改动: %+v", kept)
+	// kept 是平台侧商品，价格和库存必须保持原值，状态改为提交后的在售。
+	kept, _ := gateway.Item(misleading)
+	// submittedQuantity 是编辑载荷里的库存。
+	submittedQuantity, _ := kept.EditData["quantity"].(string)
+	if !kept.OnSale || kept.Quantity != 4 || kept.Price != "9.90" || kept.EditCount != 1 || kept.EditData["itemStatus"] != "0" || submittedQuantity != "4" {
+		t.Fatalf("提交改动了价格或库存: %+v quantity=%s", kept, submittedQuantity)
+	}
+	// unsupported 是类目不支持网页编辑的商品，必须返回拒绝而不是成功。
+	unsupported := gateway.AddItemWithStock(sellerID, "不支持类目", "6.60", 2)
+	gateway.SetOnSale(unsupported, false)
+	gateway.SetEditStatus(unsupported, "1")
+	gateway.MarkEditUnsupported(unsupported)
+	// refused、refuseErr 是平台拒绝结果。
+	refused, refuseErr := client.EnsureItemOnSale(context.Background(), cookie, unsupported)
+	if refuseErr == nil || !errors.Is(refuseErr, mtop.ErrItemEditUnsupported) || (refused != nil && refused.Submitted) {
+		t.Fatalf("不支持编辑应拒绝而不是成功: %+v err=%v", refused, refuseErr)
+	}
+	// refusedItem 是被拒绝的商品，平台数据不能被改写。
+	refusedItem, _ := gateway.Item(unsupported)
+	if refusedItem.EditCount != 0 || refusedItem.OnSale {
+		t.Fatalf("拒绝后不应改商品: %+v", refusedItem)
 	}
 	// offSale 是仍有库存但已下架的原商品。
 	offSale := gateway.AddItemWithStock(sellerID, "待上架商品", "8.80", 3)
@@ -156,17 +174,17 @@ func TestEnsureItemOnSaleKeepsExistingListing(t *testing.T) {
 	}
 	// after 是提交后的平台商品。
 	after, _ := gateway.Item(offSale)
-	// submittedQuantity 是编辑载荷里的库存，必须仍是原来的 3。
-	submittedQuantity, _ := after.EditData["quantity"].(string)
-	if !after.OnSale || after.Quantity != 3 || after.Price != "8.80" || after.EditCount != 1 || after.EditData["itemStatus"] != "0" || submittedQuantity != "3" {
-		t.Fatalf("重新上架改动了原详情: %+v quantity=%s", after, submittedQuantity)
+	// offQuantity 是编辑载荷里的库存，必须仍是原来的 3。
+	offQuantity, _ := after.EditData["quantity"].(string)
+	if !after.OnSale || after.Quantity != 3 || after.Price != "8.80" || after.EditCount != 1 || after.EditData["itemStatus"] != "0" || offQuantity != "3" || !restored.Submitted {
+		t.Fatalf("重新上架改动了原详情: %+v quantity=%s", after, offQuantity)
 	}
-	// again 是再次上架，已在售后不应再编辑。
+	// again 是读回 itemStatus=0 后的再次上架。读数仍不能跳过提交。
 	again, err := client.EnsureItemOnSale(context.Background(), cookie, offSale)
-	// repeated 是第二次上架后的平台商品。
+	// repeated 是第二次提交后的平台商品。
 	repeated, _ := gateway.Item(offSale)
-	if err != nil || !again.AlreadyOnSale || repeated.EditCount != 1 {
-		t.Fatalf("重复上架应是空操作: %+v err=%v edits=%d", again, err, repeated.EditCount)
+	if err != nil || again.AlreadyOnSale || !again.Submitted || repeated.EditCount != 2 || repeated.Quantity != 3 {
+		t.Fatalf("itemStatus=0 也不能跳过提交: %+v err=%v edits=%d", again, err, repeated.EditCount)
 	}
 	// unknown 是状态码无法识别但仍应尝试上架的原商品。
 	unknown := gateway.AddItemWithStock(sellerID, "未知状态", "7.70", 2)

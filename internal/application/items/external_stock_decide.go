@@ -116,12 +116,12 @@ type ListingSnapshot struct {
 	Source string
 }
 
-// ClassifyEditDetailStatus 解释网页编辑详情里的 itemStatus。
-// 真机编辑详情对在售商品返回 "1"（库存编辑夹具沿用该形态）；提交重新上架时写入 "0"，模拟器也会把在售读回 "0"。下架为 "-2"。
-// 其他取值视为未知，调用方应保留原始码并改用本地同步状态，不能把它当成下架。
+// ClassifyEditDetailStatus 只解释有文档依据的编辑详情状态。
+// 提交重新上架时写入 "0"，模拟器在售读回也是 "0"。"-2" 是下架。
+// "1" 曾被当成在售，但真机下架商品也会返回 "1"，因此不能据此判断在售，也不能跳过重新上架。
 func ClassifyEditDetailStatus(raw string) (string, bool) {
 	switch strings.TrimSpace(raw) {
-	case "0", "1":
+	case "0":
 		return ListingOnSale, true
 	case "-2":
 		return ListingOffSale, true

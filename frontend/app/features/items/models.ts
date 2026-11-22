@@ -192,8 +192,14 @@ export interface ExternalStockCheckResult {
   message: string;
   /** 是否没有写平台。 */
   dryRun: boolean;
-  /** 检查时的在售状态。 */
+  /** 检查时的在售状态。读取的 itemStatus 不能证明在售时为 unverified。 */
   listingState: string;
+  /** 平台结果：submitted、refused、dry_run 或 skipped。 */
+  platformOutcome: string;
+  /** editDetail 读到的原始 itemStatus。 */
+  readItemStatus: string;
+  /** 脱敏后的平台回执。 */
+  platformRet: string;
   /** 检查后的配置。 */
   config: ExternalStockConfig;
 }

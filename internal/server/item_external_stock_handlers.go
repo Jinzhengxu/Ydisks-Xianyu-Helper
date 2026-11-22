@@ -128,8 +128,14 @@ type externalStockCheckResponse struct {
 	Message string `json:"message"`
 	// DryRun 表示没有写平台。
 	DryRun bool `json:"dry_run"`
-	// ListingState 是检查时的在售状态。
+	// ListingState 是 unverified，除非平台回执明确给出在售或下架。
 	ListingState string `json:"listing_state"`
+	// PlatformOutcome 是 submitted、refused、dry_run 或 skipped。
+	PlatformOutcome string `json:"platform_outcome"`
+	// ReadItemStatus 是 editDetail 读到的原始 itemStatus，不能证明 App 是否在售。
+	ReadItemStatus string `json:"read_item_status"`
+	// PlatformRet 是平台接受或拒绝的脱敏回执。
+	PlatformRet string `json:"platform_ret"`
 	// Config 是检查后的最新非秘密配置。
 	Config externalStockResponse `json:"config"`
 }
@@ -242,7 +248,8 @@ func (s *Server) checkItemExternalStock(w http.ResponseWriter, r *http.Request) 
 	}
 	writeExternalStockJSON(w, http.StatusOK, externalStockCheckResponse{
 		Action: result.Action, Status: result.Status, Available: result.Available, Message: result.Message,
-		DryRun: result.DryRun, ListingState: result.ListingState, Config: externalStockHTTPResponse(config),
+		DryRun: result.DryRun, ListingState: result.ListingState, PlatformOutcome: result.PlatformOutcome,
+		ReadItemStatus: result.ReadItemStatus, PlatformRet: result.PlatformRet, Config: externalStockHTTPResponse(config),
 	})
 }
 

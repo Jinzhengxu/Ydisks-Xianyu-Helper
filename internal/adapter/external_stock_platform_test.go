@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	itemapp "xianyu-go/internal/application/items"
@@ -12,8 +13,8 @@ import (
 func TestListingFromDetailRecognizesLiveOnSaleStatus(t *testing.T) {
 	// onSale 是数量为 1 的在售编辑详情。
 	onSale := listingFromDetail(&mtop.ItemEditDetail{Status: "1", Quantity: 1})
-	if onSale.State != itemapp.ListingOnSale || onSale.RawStatus != "1" || onSale.Source != "editDetail" {
-		t.Fatalf("在售详情映射错误: %+v", onSale)
+	if onSale.State != itemapp.ListingUnknown || onSale.RawStatus != "1" || onSale.Source != "editDetail" {
+		t.Fatalf("itemStatus=1 不能映射为在售: %+v", onSale)
 	}
 	// offSale 是下架编辑详情。
 	offSale := listingFromDetail(&mtop.ItemEditDetail{Status: "-2"})
@@ -37,14 +38,14 @@ func TestLocalSyncedItemStatusReadsOnlyStatusCode(t *testing.T) {
 // TestExternalStockRelistDiagnosticKeepsStatusCode 验证上架回执只保留状态码，已在售时标记为空操作。
 func TestExternalStockRelistDiagnosticKeepsStatusCode(t *testing.T) {
 	// applied 是真机在售码的回执。
-	applied := externalStockApplyFromRelist(&mtop.ItemRelistResult{RawStatus: "1", AlreadyOnSale: true})
-	if !applied.Noop || applied.ListingState != itemapp.ListingOnSale || applied.Diagnostic != "editDetail itemStatus=1；已在售，未提交编辑" {
-		t.Fatalf("在售回执异常: %+v", applied)
+	applied := externalStockApplyFromRelist(&mtop.ItemRelistResult{RawStatus: "1", Submitted: true, PlatformRet: "SUCCESS::调用成功"})
+	if applied.Noop || applied.Outcome != "submitted" || applied.ReadItemStatus != "1" || applied.ListingState != "unverified" || strings.Contains(applied.Diagnostic, "已在售，未提交编辑") || !strings.Contains(applied.Diagnostic, "platform_outcome=submitted") {
+		t.Fatalf("itemStatus=1 不能当成未提交的成功: %+v", applied)
 	}
 	// unknown 是未识别状态码仍要上架时的回执。
 	unknown := externalStockApplyFromRelist(&mtop.ItemRelistResult{RawStatus: "9"})
-	if unknown.Noop || unknown.ListingState != itemapp.ListingUnknown || unknown.Diagnostic == "" {
-		t.Fatalf("未知状态回执异常: %+v", unknown)
+	if unknown.Noop || unknown.Outcome != "refused" || unknown.ListingState != "unverified" || strings.Contains(unknown.Diagnostic, "已在售") {
+		t.Fatalf("未提交不能报成功: %+v", unknown)
 	}
 }
 

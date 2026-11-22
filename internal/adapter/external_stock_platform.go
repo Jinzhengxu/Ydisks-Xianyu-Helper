@@ -48,7 +48,7 @@ func (p *ItemPublishPort) Unpublish(ctx context.Context, userID int64, cookieID,
 	return itemapp.ExternalStockApplyResult{}, mapExternalStockPlatformError(err)
 }
 
-// Relist 重新上架同一个原商品。已经在售时不提交编辑，因此不改价格、库存和描述。
+// Relist 重新上架同一个原商品。itemStatus 读数不会跳过编辑；只改提交的 itemStatus，不改价格、库存和描述。
 func (p *ItemPublishPort) Relist(ctx context.Context, userID int64, cookieID, itemID string) (itemapp.ExternalStockApplyResult, error) {
 	// applied 由平台调用闭包写入。
 	var applied itemapp.ExternalStockApplyResult
@@ -61,17 +61,23 @@ func (p *ItemPublishPort) Relist(ctx context.Context, userID int64, cookieID, it
 		}
 		// result、err 是原商品上架结果。
 		result, err := ensurer.EnsureItemOnSale(callCtx, cookies, itemID)
+		if result != nil {
+			applied = externalStockApplyFromRelist(result)
+		}
 		if err != nil {
 			return "", err
 		}
-		if result == nil {
-			return "", errors.New("闲鱼商品重新上架未返回结果")
+		if result == nil || !result.Submitted {
+			return "", errors.New("闲鱼商品重新上架未返回已接受的编辑回执")
 		}
-		applied = externalStockApplyFromRelist(result)
 		return result.UpdatedCookies, nil
 	}, mapExternalStockPlatformError)
 	if callErr != nil {
-		return itemapp.ExternalStockApplyResult{}, callErr
+		applied.Outcome = "refused"
+		if applied.ListingState == "" {
+			applied.ListingState = "unverified"
+		}
+		return applied, callErr
 	}
 	if persistErr != nil && p.logger != nil {
 		p.logger.WarnContext(ctx, "外部库存同步后保存账号会话失败", "account", cookieID, "error", persistErr)
@@ -79,26 +85,41 @@ func (p *ItemPublishPort) Relist(ctx context.Context, userID int64, cookieID, it
 	return applied, nil
 }
 
-// externalStockApplyFromRelist 把上架回执收成不含凭证的诊断。
+// externalStockApplyFromRelist 把上架回执收成不含凭证的诊断。itemStatus 读数只原样记录。
 func externalStockApplyFromRelist(result *mtop.ItemRelistResult) itemapp.ExternalStockApplyResult {
 	// raw 是原始 itemStatus；空字符串显示为“空”。
 	raw := strings.TrimSpace(result.RawStatus)
 	if raw == "" {
 		raw = "空"
 	}
-	// state、known 是该状态码能否对应到在售或下架。未知也原样保留。
-	state, known := itemapp.ClassifyEditDetailStatus(raw)
-	if !known {
-		state = itemapp.ListingUnknown
+	// ret 是脱敏后的平台回执。
+	ret := sanitizePlatformText(result.PlatformRet)
+	if result.Submitted {
+		// note 标明平台接受了编辑，并说明读数不能证明当前在售。
+		note := "platform_outcome=submitted；read_item_status=" + raw + "；该读数不能证明商品当前在售；平台已接受 edit，只把 itemStatus 写成 0，价格、库存和描述沿用读取值；platform_ret=" + ret
+		return itemapp.ExternalStockApplyResult{Diagnostic: note, ListingState: "unverified", Outcome: "submitted", ReadItemStatus: raw, PlatformRet: ret}
 	}
-	// note 说明是否提交了编辑，以及提交时只改了状态码。
-	note := "editDetail itemStatus=" + raw
-	if result.AlreadyOnSale {
-		note += "；已在售，未提交编辑"
-	} else {
-		note += "；已按原详情重新上架，只把 itemStatus 写成 0"
+	// note 是尚未被平台接受的读取说明，不能写成上架成功。
+	note := "platform_outcome=not_accepted；read_item_status=" + raw + "；未获得平台接受的编辑回执"
+	return itemapp.ExternalStockApplyResult{Diagnostic: note, ListingState: "unverified", Outcome: "refused", ReadItemStatus: raw, PlatformRet: ret}
+}
+
+// sanitizePlatformText 保留平台回执里的错误码和短说明，去掉凭证和过长正文。
+func sanitizePlatformText(message string) string {
+	// text 是回执的第一行。
+	text := strings.TrimSpace(strings.Split(message, "\n")[0])
+	// lower 用来识别凭证字样。
+	lower := strings.ToLower(text)
+	if text == "" || strings.Contains(lower, "cookie") || strings.Contains(lower, "token") || strings.Contains(lower, "bearer") {
+		if strings.Contains(strings.ToUpper(message), "PC_NOT_SUPPORT_PUBLISH_OR_EDIT") {
+			return "FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT"
+		}
+		return ""
 	}
-	return itemapp.ExternalStockApplyResult{Diagnostic: note, ListingState: state, Noop: result.AlreadyOnSale}
+	if len(text) > 160 {
+		text = text[:160]
+	}
+	return text
 }
 
 // redactDownShelfMessage 保留下架回执的短文本。疑似凭证或过长文本改成固定说明。
@@ -188,7 +209,7 @@ func mapExternalStockPlatformError(err error) error {
 	case errors.Is(err, itemapp.ErrExternalStockEditUnsupported), errors.Is(err, itemapp.ErrExternalStockRisk), errors.Is(err, itemapp.ErrExternalStockSession), errors.Is(err, itemapp.ErrExternalStockPlatform), errors.Is(err, itemapp.ErrExternalStockMultiSpec), errors.Is(err, itemapp.ErrExternalStockUnknownState):
 		return err
 	case errors.Is(err, mtop.ErrItemEditUnsupported), errors.Is(err, itemapp.ErrStockEditUnsupported), errors.Is(err, itemapp.ErrRelistEditUnsupported):
-		return itemapp.ErrExternalStockEditUnsupported
+		return errors.Join(itemapp.ErrExternalStockEditUnsupported, errors.New("FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT"))
 	case errors.Is(err, mtop.ErrItemMultiSpecExternalQuantity):
 		return itemapp.ErrExternalStockMultiSpec
 	case errors.Is(err, itemapp.ErrStockRiskVerification), errors.Is(err, itemapp.ErrRelistRiskVerification), mtop.IsRiskVerificationErr(err):
@@ -196,12 +217,15 @@ func mapExternalStockPlatformError(err error) error {
 	case errors.Is(err, itemapp.ErrStockSessionExpired), errors.Is(err, itemapp.ErrRelistSessionExpired), errors.Is(err, itemapp.ErrDownShelfCredentialChanged), mtop.IsSessionExpiredErr(err):
 		return itemapp.ErrExternalStockSession
 	default:
-		// text 是平台错误的首行，用来识别 HTTP 5xx，不回传响应正文。
-		text := err.Error()
-		if strings.Contains(text, "HTTP 5") {
+		// text 是平台错误的脱敏首行，保留拒绝码。
+		text := sanitizePlatformText(err.Error())
+		if strings.Contains(err.Error(), "HTTP 5") {
 			return errors.Join(itemapp.ErrExternalStockPlatform, errors.New("平台返回 5xx"))
 		}
-		return errors.Join(itemapp.ErrExternalStockPlatform, errors.New("平台动作失败"))
+		if text == "" {
+			text = "平台动作失败"
+		}
+		return errors.Join(itemapp.ErrExternalStockPlatform, errors.New(text))
 	}
 }
 

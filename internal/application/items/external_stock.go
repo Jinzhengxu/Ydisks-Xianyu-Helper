@@ -99,8 +99,14 @@ type ExternalStockCheckResult struct {
 	Message string
 	// DryRun 表示没有提交下架、上架或改库存。
 	DryRun bool
-	// ListingState 是检查时读到的在售状态。
+	// ListingState 是 unverified，除非平台回执明确给出在售或下架。
 	ListingState string
+	// PlatformOutcome 是 submitted、refused、dry_run 或 skipped。
+	PlatformOutcome string
+	// ReadItemStatus 是 editDetail 读到的原始 itemStatus。
+	ReadItemStatus string
+	// PlatformRet 是平台接受或拒绝的脱敏回执。
+	PlatformRet string
 }
 
 // ExternalStockRepository 是外部库存配置的持久化端口，HTTP 响应不得使用带明文请求头的方法。
@@ -151,10 +157,16 @@ type ExternalStockRead struct {
 type ExternalStockApplyResult struct {
 	// Diagnostic 是脱敏后的平台状态说明，不含 Cookie、请求头或响应正文。
 	Diagnostic string
-	// ListingState 是回执里看到的在售状态；未知时调用方仍然不得因此停止。
+	// ListingState 固定为 unverified，除非平台给出了明确的在售或下架回执。读取的 itemStatus 不算。
 	ListingState string
-	// Noop 表示商品已经处于目标状态，没有提交会改内容的编辑。
+	// Noop 只有平台返回明确的已处于目标状态回执时才为真。itemStatus 读数不能把它设为真。
 	Noop bool
+	// Outcome 是 submitted、refused、dry_run 或 skipped。
+	Outcome string
+	// ReadItemStatus 是 editDetail 读到的原始 itemStatus，不能证明 App 是否在售。
+	ReadItemStatus string
+	// PlatformRet 是平台 ret 或拒绝码的脱敏文本。
+	PlatformRet string
 }
 
 // ExternalStockPlatform 是原商品下架和重新上架的最小端口。动作本身必须幂等，不能另建商品。
@@ -163,7 +175,7 @@ type ExternalStockPlatform interface {
 	Inspect(context.Context, int64, string, string) (ListingSnapshot, error)
 	// Unpublish 下架原商品。商品已经不在售时返回成功。
 	Unpublish(context.Context, int64, string, string) (ExternalStockApplyResult, error)
-	// Relist 重新上架同一个原商品。已经在售时不提交编辑。
+	// Relist 重新上架同一个原商品。读取的 itemStatus 不会跳过提交。
 	Relist(context.Context, int64, string, string) (ExternalStockApplyResult, error)
 	// SyncStock 保留给端口兼容；外部库存的目标状态动作不会改写平台库存。
 	SyncStock(context.Context, int64, string, string, int) error
@@ -569,10 +581,12 @@ func (service *ExternalStockService) finish(ctx context.Context, config External
 	result.Message = decision.Reason
 	if decision.DryRun && decision.Action != ExternalStockActionStop && decision.Action != ExternalStockActionNone {
 		result.Status = "dry_run"
+		result.PlatformOutcome = "dry_run"
 		service.logger.InfoContext(ctx, "外部库存演练", "account", config.CookieID, "item_id", config.ItemID, "trigger", options.Trigger, "action", decision.Action, "available", result.Available)
 		return service.persist(ctx, config, result, decision.BackoffClass)
 	}
 	if decision.Action == ExternalStockActionStop {
+		result.PlatformOutcome = "refused"
 		result.Status = "backed_off"
 		if decision.BackoffClass == "" {
 			decision.BackoffClass = ExternalStockBackoffAll
@@ -581,6 +595,7 @@ func (service *ExternalStockService) finish(ctx context.Context, config External
 		return service.persist(ctx, config, result, decision.BackoffClass)
 	}
 	if decision.Action == ExternalStockActionNone {
+		result.PlatformOutcome = "skipped"
 		result.Status = "ok"
 		service.logger.InfoContext(ctx, "外部库存无需改动商品", "account", config.CookieID, "item_id", config.ItemID, "trigger", options.Trigger, "reason", decision.Reason)
 		return service.persist(ctx, config, result, "")
@@ -614,12 +629,19 @@ func (service *ExternalStockService) finish(ctx context.Context, config External
 		}
 		result.Action = ExternalStockActionStop
 		result.Status = "backed_off"
-		result.Message = safeExternalStockError(actionErr)
+		result.PlatformOutcome = "refused"
+		result.ReadItemStatus = applied.ReadItemStatus
+		result.PlatformRet = applied.PlatformRet
+		result.ListingState = "unverified"
+		result.Message = annotateListingReason(safeExternalStockError(actionErr), applied.Diagnostic)
 		service.logger.WarnContext(ctx, "外部库存平台动作失败", "account", config.CookieID, "item_id", config.ItemID, "trigger", options.Trigger, "action", decision.Action, "err", result.Message)
 		return service.persist(ctx, config, result, class)
 	}
 	result.Status = "ok"
 	result.ListingState = applied.ListingState
+	result.PlatformOutcome = applied.Outcome
+	result.ReadItemStatus = applied.ReadItemStatus
+	result.PlatformRet = applied.PlatformRet
 	result.Message = annotateListingReason(decision.Reason, applied.Diagnostic)
 	service.logger.InfoContext(ctx, "外部库存已同步商品状态", "account", config.CookieID, "item_id", config.ItemID, "trigger", options.Trigger, "action", decision.Action, "noop", applied.Noop)
 	return service.persist(ctx, config, result, "")

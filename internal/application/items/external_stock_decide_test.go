@@ -46,12 +46,12 @@ func TestParseAvailableCount(t *testing.T) {
 func TestClassifyListingStatus(t *testing.T) {
 	// state、known 是编辑详情状态码的解释。
 	state, known := ClassifyEditDetailStatus("1")
-	if state != ListingOnSale || !known {
-		t.Fatalf("编辑详情 1 应是在售: %s %v", state, known)
+	if state != ListingUnknown || known {
+		t.Fatalf("编辑详情 1 不能当成在售: %s %v", state, known)
 	}
 	state, known = ClassifyEditDetailStatus("0")
 	if state != ListingOnSale || !known {
-		t.Fatalf("编辑详情 0 应是在售: %s %v", state, known)
+		t.Fatalf("编辑详情 0 仍是提交用的在售值: %s %v", state, known)
 	}
 	state, known = ClassifyEditDetailStatus("-2")
 	if state != ListingOffSale || !known {

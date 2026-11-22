@@ -4504,7 +4504,14 @@ export interface components {
             available?: number | null;
             message: string;
             dry_run: boolean;
+            /** @description 读取的 itemStatus 不能证明在售。没有明确平台回执时为 unverified。 */
             listing_state: string;
+            /** @description submitted 表示平台接受了本次编辑；refused 表示平台拒绝；dry_run 表示没有提交；skipped 表示同一天相同库存跳过。 */
+            platform_outcome?: string;
+            /** @description editDetail 读到的原始 itemStatus。1 不能证明商品正在出售。 */
+            read_item_status?: string;
+            /** @description 平台 ret 或拒绝码的脱敏文本，不含 Cookie。 */
+            platform_ret?: string;
             config: components["schemas"]["ItemExternalStockResponse"];
         };
         ItemStockUpdateResponse: {

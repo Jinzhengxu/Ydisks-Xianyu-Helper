@@ -20,8 +20,12 @@ type ItemRelistResult struct {
 	AlreadyOnSale bool
 	// RestoredQuantity 表示库存为 0 的商品被补回了最小库存（单规格为 1，多规格为各规格行 1）。
 	RestoredQuantity bool
-	// RawStatus 是 editDetail 返回的原始 itemStatus，只用于诊断，不含 Cookie。
+	// RawStatus 是 editDetail 读到的原始 itemStatus，只用于诊断。它不能证明闲鱼 App 当前是否在售。
 	RawStatus string
+	// Submitted 表示这次已经向编辑接口提交，并且平台接受了该次提交。
+	Submitted bool
+	// PlatformRet 是平台 ret 的首条文本，只保留业务回执，不含 Cookie。
+	PlatformRet string
 	// UpdatedCookies 是请求累计更新后的 Cookie；为空表示没有变化。
 	UpdatedCookies string
 }
@@ -152,19 +156,10 @@ func (c *ClientImpl) RelistItemWithQuantity(ctx context.Context, cookiesStr, ite
 	return result, nil
 }
 
-// editDetailAlreadyOnSale 判断编辑详情的 itemStatus 是否已经表示在售。
-// 真机在售商品返回 "1"，提交在售和模拟器读回使用 "0"。这两种都不需要再提交编辑。
-func editDetailAlreadyOnSale(status string) bool {
-	switch strings.TrimSpace(status) {
-	case "0", "1":
-		return true
-	default:
-		return false
-	}
-}
-
-// EnsureItemOnSale 把原商品置于在售。已在售时只读取详情并成功返回，不提交编辑，因此不改价格、库存和描述。
-// 不在售或状态码无法识别时，用当前详情原样回填，只把 itemStatus 写成在售值 "0"。固定最多两次平台请求，失败不重试。
+// EnsureItemOnSale 对原商品提交一次重新上架。先读 editDetail，再原样回填，只把 itemStatus 写成 "0"。
+// 读取到的 itemStatus（包括 "1"）不能证明闲鱼 App 正在出售，因此一律提交，不把读数当成已在售而跳过。
+// 项目里没有已确认的“已在售”业务回执；平台拒绝、风控或不支持网页编辑时返回错误，不伪装成功。
+// 不发布新商品，不改价格、库存和描述。固定最多两次平台请求，失败不重试。
 func (c *ClientImpl) EnsureItemOnSale(ctx context.Context, cookiesStr, itemID string) (*ItemRelistResult, error) {
 	// id 是规范化后的原商品 ID，不会另建商品。
 	id := strings.TrimSpace(itemID)
@@ -179,30 +174,30 @@ func (c *ClientImpl) EnsureItemOnSale(ctx context.Context, cookiesStr, itemID st
 	if detail.ItemID != id {
 		return nil, ErrItemEditDetailUnusable
 	}
-	// result 带回原始状态码和读取阶段的 Cookie 更新。
+	// result 带回原始状态码。此时还没有提交，不能当成上架成功。
 	result := &ItemRelistResult{ItemID: id, UpdatedCookies: detail.UpdatedCookies, RawStatus: strings.TrimSpace(detail.Status)}
-	if editDetailAlreadyOnSale(detail.Status) {
-		result.AlreadyOnSale = true
-		return result, nil
-	}
-	// payload 是原详情的全量副本，随后只改在售状态。
+	// payload 是原详情的全量副本，随后只改提交用的在售状态值。
 	payload, err := cloneItemEditPayload(detail, id)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	payload["itemStatus"] = itemStatusOnSale
-	// cookies 是提交后累计更新的 Cookie。
-	_, _, cookies, err := c.submitItemEdit(ctx, cookiesStr, detail, id, payload)
-	if err != nil {
-		return nil, err
+	// ret 是平台接受本次编辑后的首条回执；cookies 是提交后累计更新的 Cookie。
+	ret, _, cookies, err := c.submitItemEdit(ctx, cookiesStr, detail, id, payload)
+	if cookies != "" {
+		result.UpdatedCookies = cookies
 	}
-	result.UpdatedCookies = cookies
+	if err != nil {
+		return result, err
+	}
+	result.Submitted = true
+	result.PlatformRet = ret
 	return result, nil
 }
 
 // ItemEnsureOnSaleClient 是外部库存把原商品置于在售的可选能力，避免扩大所有客户端替身。
 type ItemEnsureOnSaleClient interface {
-	// EnsureItemOnSale 保证原商品在售。已在售时不提交编辑。
+	// EnsureItemOnSale 提交一次原商品重新上架。itemStatus 读数不会跳过提交。
 	EnsureItemOnSale(ctx context.Context, cookiesStr, itemID string) (*ItemRelistResult, error)
 }
 
