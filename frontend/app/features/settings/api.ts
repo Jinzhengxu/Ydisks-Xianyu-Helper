@@ -108,6 +108,7 @@ export type APIAccessScope =
   | 'items:read'
   | 'items:publish'
   | 'items:unpublish'
+  | 'items:external-stock'
   | 'orders:read'
   | 'chat:read'
   | 'chat:send'

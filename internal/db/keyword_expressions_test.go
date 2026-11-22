@@ -270,9 +270,9 @@ func TestMultiDBKeywordExpressionsMigration(t *testing.T) {
 				t.Fatalf("set goose dialect: %v", dialectErr)
 			}
 			goose.SetBaseFS(migrationsFS)
-			// version、versionErr 保存回退前的迁移版本及读取错误。
+			// version、versionErr 保存回退前的迁移版本及读取错误。版本号随后续迁移增加，不能写死。
 			version, versionErr := goose.GetDBVersion(target.store.DB)
-			if versionErr != nil || version != 66 {
+			if versionErr != nil || version < 54 {
 				t.Fatalf("initial migration version=%d err=%v", version, versionErr)
 			}
 			// downErr 保存回退关键词表达式迁移的错误。
@@ -282,17 +282,17 @@ func TestMultiDBKeywordExpressionsMigration(t *testing.T) {
 			if columnExistsForDialect(t, target.store.DB, target.dialect, "keywords", "keyword_expressions") || columnExistsForDialect(t, target.store.DB, target.dialect, "keywords", "match_type") {
 				t.Fatal("keyword expression columns should be absent after down to 00053")
 			}
-			// upErr 保存重新应用关键词表达式迁移的错误。
-			if upErr := goose.UpTo(target.store.DB, "migrations/"+subdir, 66); upErr != nil {
+			// upErr 保存重新升回回退前版本的错误，包含关键词表达式及之后的迁移。
+			if upErr := goose.UpTo(target.store.DB, "migrations/"+subdir, version); upErr != nil {
 				t.Fatalf("up keyword expression migration: %v", upErr)
 			}
 			if !columnExistsForDialect(t, target.store.DB, target.dialect, "keywords", "keyword_expressions") || !columnExistsForDialect(t, target.store.DB, target.dialect, "keywords", "match_type") {
 				t.Fatal("keyword expression columns should exist after up to 00054")
 			}
-			// finalVersion、finalVersionErr 保存重新升级后的最新迁移版本及读取错误。
+			// finalVersion、finalVersionErr 保存重新升级后的迁移版本及读取错误，应回到回退前的版本。
 			finalVersion, finalVersionErr := goose.GetDBVersion(target.store.DB)
-			if finalVersionErr != nil || finalVersion != 66 {
-				t.Fatalf("final migration version=%d err=%v", finalVersion, finalVersionErr)
+			if finalVersionErr != nil || finalVersion != version {
+				t.Fatalf("final migration version=%d err=%v want=%d", finalVersion, finalVersionErr, version)
 			}
 		})
 	}

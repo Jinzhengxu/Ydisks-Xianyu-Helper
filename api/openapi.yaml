@@ -4234,6 +4234,152 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  "/api/v1/items/{cookie_id}/{item_id}/external-stock":
+    get:
+      operationId: getApiV1ItemsBycookie_idByitem_idExternalStock
+      summary: 读取商品外部库存配置（不返回请求头明文）
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      parameters:
+        - name: cookie_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: item_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: 外部库存配置和最近状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemExternalStockResponse'
+        '400':
+          description: 请求参数无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 无权操作该账号
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 商品不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      operationId: putApiV1ItemsBycookie_idByitem_idExternalStock
+      summary: 保存商品外部库存配置（请求头值只写入，响应不回显）
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      parameters:
+        - name: cookie_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: item_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemExternalStockUpdateRequest'
+      responses:
+        '200':
+          description: 保存后的外部库存配置
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemExternalStockResponse'
+        '400':
+          description: 配置无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 令牌缺少 items:external-stock 权限，或无权操作该账号
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 商品不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  "/api/v1/items/{cookie_id}/{item_id}/external-stock/check":
+    post:
+      operationId: postApiV1ItemsBycookie_idByitem_idExternalStockCheck
+      summary: 立即检查商品外部库存；execute_once 为真时只这一次真实执行且不修改已保存演练开关
+      security: [{cookieAuth: []}, {bearerAuth: []}]
+      parameters:
+        - name: cookie_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: item_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemExternalStockCheckRequest'
+      responses:
+        '200':
+          description: 本次检查结果和最新状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemExternalStockCheckResponse'
+        '400':
+          description: 商品未启用外部库存或请求无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 令牌缺少 items:external-stock 权限
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 商品不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   "/api/v1/items/{cookie_id}/{item_id}":
     delete:
       operationId: deleteApiV1ItemsBycookie_idByitem_id
@@ -11808,6 +11954,85 @@ components:
               key: {type: string}
               quantity: {type: integer, minimum: 0, maximum: 999999}
               expected_quantity: {type: integer, minimum: 0}
+    ItemExternalStockUpdateRequest:
+      type: object
+      required: [enabled, source_url, json_path, timeout_seconds, cron, timezone, interval_minutes, dry_run, sync_platform_stock, stock_cap, headers]
+      properties:
+        enabled: {type: boolean}
+        source_url: {type: string}
+        json_path: {type: string}
+        timeout_seconds: {type: integer, minimum: 5, maximum: 60}
+        user_agent: {type: string}
+        cron: {type: string}
+        timezone: {type: string}
+        interval_minutes: {type: integer, minimum: 0, maximum: 1440}
+        dry_run: {type: boolean}
+        sync_platform_stock: {type: boolean}
+        stock_cap: {type: integer, minimum: 1, maximum: 999999}
+        headers:
+          type: array
+          items:
+            type: object
+            required: [name]
+            properties:
+              name: {type: string}
+              value: {type: string}
+              keep: {type: boolean}
+    ItemExternalStockResponse:
+      type: object
+      required: [cookie_id, item_id, enabled, source_url, method, json_path, timeout_seconds, user_agent, cron, timezone, interval_minutes, dry_run, sync_platform_stock, stock_cap, headers, last_checked_unix, last_action, last_status, last_error, backoff_until_unix, backoff_class]
+      properties:
+        cookie_id: {type: string}
+        item_id: {type: string}
+        enabled: {type: boolean}
+        source_url: {type: string}
+        method: {type: string, enum: [GET]}
+        json_path: {type: string}
+        timeout_seconds: {type: integer}
+        user_agent: {type: string}
+        cron: {type: string}
+        timezone: {type: string}
+        interval_minutes: {type: integer}
+        dry_run: {type: boolean}
+        sync_platform_stock: {type: boolean}
+        stock_cap: {type: integer}
+        headers:
+          type: array
+          items:
+            type: object
+            required: [name, set]
+            properties:
+              name: {type: string}
+              set: {type: boolean}
+        last_checked_unix: {type: integer, format: int64}
+        last_available: {type: integer, nullable: true}
+        last_action: {type: string}
+        last_status: {type: string}
+        last_error: {type: string}
+        backoff_until_unix: {type: integer, format: int64}
+        backoff_class: {type: string}
+    ItemExternalStockCheckRequest:
+      type: object
+      properties:
+        dry_run: {type: boolean, description: 为真时这一次只演练。为假时不能关闭已保存的演练开关。}
+        execute_once: {type: boolean, description: 为真时这一次手动检查真实下架或重新上架，不修改已保存的演练开关。不能与 dry_run 为真同时使用。调度和付款发货忽略该字段。}
+    ItemExternalStockCheckResponse:
+      type: object
+      required: [action, status, message, dry_run, listing_state, config]
+      properties:
+        action: {type: string}
+        status: {type: string}
+        available: {type: integer, nullable: true}
+        message: {type: string}
+        dry_run: {type: boolean}
+        listing_state: {type: string, description: 读取的 itemStatus 不能证明在售。没有明确平台回执时为 unverified。}
+        platform_outcome: {type: string, description: submitted 表示平台接受了本次编辑；refused 表示平台拒绝；dry_run 表示没有提交；skipped 表示同一天相同库存跳过。}
+        read_item_status: {type: string, description: editDetail 读到的原始 itemStatus。1 不能证明商品正在出售。}
+        read_quantity: {type: integer, description: editDetail 读到的平台库存。库存接口 GET /stock 只返回 quantity，不返回 itemStatus。}
+        stock_adjusted: {type: boolean, description: 为真表示这次提交按已开启的同步平台库存改写了数量。为假表示没有改库存。}
+        platform_ret: {type: string, description: 平台 ret 或拒绝码的脱敏文本，不含 Cookie。QUANTITY_ZERO_NOT_ADJUSTED 表示库存为 0 且未改库存，因此没有提交。}
+        config:
+          $ref: '#/components/schemas/ItemExternalStockResponse'
     ItemStockUpdateResponse:
       type: object
       required: [success, data]
@@ -11851,7 +12076,7 @@ components:
           uniqueItems: true
           items:
             type: string
-            enum: [accounts:read, items:read, items:publish, items:unpublish, orders:read, chat:read, chat:send, chat:takeover, replies:manage, automation:read, automation:manage]
+            enum: [accounts:read, items:read, items:publish, items:unpublish, items:external-stock, orders:read, chat:read, chat:send, chat:takeover, replies:manage, automation:read, automation:manage]
         expires_in_days: {type: integer, minimum: 1, maximum: 365, default: 90}
     APIAccessTokenSummary:
       type: object
@@ -11864,7 +12089,7 @@ components:
           type: array
           items:
             type: string
-            enum: [accounts:read, items:read, items:publish, items:unpublish, orders:read, chat:read, chat:send, chat:takeover, replies:manage, automation:read, automation:manage]
+            enum: [accounts:read, items:read, items:publish, items:unpublish, items:external-stock, orders:read, chat:read, chat:send, chat:takeover, replies:manage, automation:read, automation:manage]
         created_at: {type: integer, format: int64}
         expires_at: {type: integer, format: int64}
         last_used_at: {type: integer, format: int64}

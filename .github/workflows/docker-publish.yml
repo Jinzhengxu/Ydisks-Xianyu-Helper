@@ -5,6 +5,11 @@ on:
     branches:
       - dev
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 额外镜像标签（小写字母、数字、点、下划线、连字符，例如 external-stock）
+        required: false
+        type: string
   workflow_call:
     inputs:
       app_version:
@@ -27,10 +32,13 @@ jobs:
     outputs:
       app_version: ${{ steps.version.outputs.app_version }}
       build_time: ${{ steps.version.outputs.build_time }}
+      extra_tag: ${{ steps.version.outputs.extra_tag }}
     steps:
       - name: 准备构建版本
         id: version
         shell: bash
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           set -Eeuo pipefail
           if [ -n "${{ inputs.app_version }}" ]; then
@@ -38,6 +46,12 @@ jobs:
           else
             app_version="${GITHUB_REF_NAME}-${GITHUB_SHA::12}"
           fi
+          extra_tag="${IMAGE_TAG:-}"
+          if [ -n "$extra_tag" ] && [[ ! "$extra_tag" =~ ^[a-z0-9][a-z0-9._-]{0,62}$ ]]; then
+            echo "额外镜像标签只能包含小写字母、数字、点、下划线和连字符：$extra_tag" >&2
+            exit 1
+          fi
+          echo "extra_tag=$extra_tag" >> "$GITHUB_OUTPUT"
           if [ -n "${{ inputs.app_version }}" ] && [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "正式版本必须符合 1.2.3 格式：$app_version" >&2
             exit 1
@@ -296,6 +310,7 @@ jobs:
             type=sha,format=long
             type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=${{ needs.verify.outputs.extra_tag }},enable=${{ needs.verify.outputs.extra_tag != '' }}
 
       - name: 创建并推送多架构 manifest
         shell: bash

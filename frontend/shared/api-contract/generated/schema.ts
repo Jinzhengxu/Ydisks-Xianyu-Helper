@@ -1165,6 +1165,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/items/{cookie_id}/{item_id}/external-stock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取商品外部库存配置（不返回请求头明文） */
+        get: operations["getApiV1ItemsBycookie_idByitem_idExternalStock"];
+        /** 保存商品外部库存配置（请求头值只写入，响应不回显） */
+        put: operations["putApiV1ItemsBycookie_idByitem_idExternalStock"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/{cookie_id}/{item_id}/external-stock/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 立即检查商品外部库存；execute_once 为真时只这一次真实执行且不修改已保存演练开关 */
+        post: operations["postApiV1ItemsBycookie_idByitem_idExternalStockCheck"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/items/{cookie_id}/{item_id}": {
         parameters: {
             query?: never;
@@ -4409,6 +4444,80 @@ export interface components {
                 expected_quantity: number;
             }[];
         };
+        ItemExternalStockUpdateRequest: {
+            enabled: boolean;
+            source_url: string;
+            json_path: string;
+            timeout_seconds: number;
+            user_agent?: string;
+            cron: string;
+            timezone: string;
+            interval_minutes: number;
+            dry_run: boolean;
+            sync_platform_stock: boolean;
+            stock_cap: number;
+            headers: {
+                name: string;
+                value?: string;
+                keep?: boolean;
+            }[];
+        };
+        ItemExternalStockResponse: {
+            cookie_id: string;
+            item_id: string;
+            enabled: boolean;
+            source_url: string;
+            /** @enum {string} */
+            method: "GET";
+            json_path: string;
+            timeout_seconds: number;
+            user_agent: string;
+            cron: string;
+            timezone: string;
+            interval_minutes: number;
+            dry_run: boolean;
+            sync_platform_stock: boolean;
+            stock_cap: number;
+            headers: {
+                name: string;
+                set: boolean;
+            }[];
+            /** Format: int64 */
+            last_checked_unix: number;
+            last_available?: number | null;
+            last_action: string;
+            last_status: string;
+            last_error: string;
+            /** Format: int64 */
+            backoff_until_unix: number;
+            backoff_class: string;
+        };
+        ItemExternalStockCheckRequest: {
+            /** @description 为真时这一次只演练。为假时不能关闭已保存的演练开关。 */
+            dry_run?: boolean;
+            /** @description 为真时这一次手动检查真实下架或重新上架，不修改已保存的演练开关。不能与 dry_run 为真同时使用。调度和付款发货忽略该字段。 */
+            execute_once?: boolean;
+        };
+        ItemExternalStockCheckResponse: {
+            action: string;
+            status: string;
+            available?: number | null;
+            message: string;
+            dry_run: boolean;
+            /** @description 读取的 itemStatus 不能证明在售。没有明确平台回执时为 unverified。 */
+            listing_state: string;
+            /** @description submitted 表示平台接受了本次编辑；refused 表示平台拒绝；dry_run 表示没有提交；skipped 表示同一天相同库存跳过。 */
+            platform_outcome?: string;
+            /** @description editDetail 读到的原始 itemStatus。1 不能证明商品正在出售。 */
+            read_item_status?: string;
+            /** @description editDetail 读到的平台库存。库存接口 GET /stock 只返回 quantity，不返回 itemStatus。 */
+            read_quantity?: number;
+            /** @description 为真表示这次提交按已开启的同步平台库存改写了数量。为假表示没有改库存。 */
+            stock_adjusted?: boolean;
+            /** @description 平台 ret 或拒绝码的脱敏文本，不含 Cookie。QUANTITY_ZERO_NOT_ADJUSTED 表示库存为 0 且未改库存，因此没有提交。 */
+            platform_ret?: string;
+            config: components["schemas"]["ItemExternalStockResponse"];
+        };
         ItemStockUpdateResponse: {
             success: boolean;
             data: {
@@ -4434,7 +4543,7 @@ export interface components {
         };
         APIAccessTokenCreateRequest: {
             name: string;
-            scopes: ("accounts:read" | "items:read" | "items:publish" | "items:unpublish" | "orders:read" | "chat:read" | "chat:send" | "chat:takeover" | "replies:manage" | "automation:read" | "automation:manage")[];
+            scopes: ("accounts:read" | "items:read" | "items:publish" | "items:unpublish" | "items:external-stock" | "orders:read" | "chat:read" | "chat:send" | "chat:takeover" | "replies:manage" | "automation:read" | "automation:manage")[];
             /** @default 90 */
             expires_in_days: number;
         };
@@ -4442,7 +4551,7 @@ export interface components {
             id: string;
             name: string;
             prefix: string;
-            scopes: ("accounts:read" | "items:read" | "items:publish" | "items:unpublish" | "orders:read" | "chat:read" | "chat:send" | "chat:takeover" | "replies:manage" | "automation:read" | "automation:manage")[];
+            scopes: ("accounts:read" | "items:read" | "items:publish" | "items:unpublish" | "items:external-stock" | "orders:read" | "chat:read" | "chat:send" | "chat:takeover" | "replies:manage" | "automation:read" | "automation:manage")[];
             /** Format: int64 */
             created_at: number;
             /** Format: int64 */
@@ -10614,6 +10723,191 @@ export interface operations {
             };
             /** @description 平台失败、要求安全验证、账号登录已失效，或平台已修改但账号会话写回失败（platform_stock_updated_cookie_persist_failed） */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getApiV1ItemsBycookie_idByitem_idExternalStock: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                cookie_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 外部库存配置和最近状态 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemExternalStockResponse"];
+                };
+            };
+            /** @description 请求参数无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 无权操作该账号 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 商品不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    putApiV1ItemsBycookie_idByitem_idExternalStock: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                cookie_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ItemExternalStockUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description 保存后的外部库存配置 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemExternalStockResponse"];
+                };
+            };
+            /** @description 配置无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 令牌缺少 items:external-stock 权限，或无权操作该账号 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 商品不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    postApiV1ItemsBycookie_idByitem_idExternalStockCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                cookie_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ItemExternalStockCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description 本次检查结果和最新状态 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemExternalStockCheckResponse"];
+                };
+            };
+            /** @description 商品未启用外部库存或请求无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 未认证 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 令牌缺少 items:external-stock 权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 商品不存在 */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

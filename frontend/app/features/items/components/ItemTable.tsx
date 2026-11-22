@@ -21,6 +21,8 @@ export interface ItemTableProps {
   onOpenAISettings: (item: Item) => void;
   /** onOpenStock 打开该商品的库存调整弹窗；缺省时不显示库存按钮。 */
   onOpenStock?: (item: Item) => void;
+  /** onOpenExternalStock 打开该商品的外部库存配置；缺省时不显示入口。 */
+  onOpenExternalStock?: (item: Item) => void;
   /** onEdit 打开商品编辑弹窗。 */
   onEdit: (item: Item) => void;
   /** onDelete 删除商品。 */
@@ -30,7 +32,7 @@ export interface ItemTableProps {
 }
 
 /** ItemTable 以表格形式展示商品，并逐列标出四类交易自动化规则的配置数量。 */
-const ItemTable: React.FC<ItemTableProps> = ({ items, rules, accountNickname, formatPrice, aiStatusText, onConfigureDelivery, onOpenAISettings, onOpenStock, onEdit, onDelete, emptyText }) => {
+const ItemTable: React.FC<ItemTableProps> = ({ items, rules, accountNickname, formatPrice, aiStatusText, onConfigureDelivery, onOpenAISettings, onOpenStock, onOpenExternalStock, onEdit, onDelete, emptyText }) => {
   if (items.length === 0) return <div className="py-20 text-center text-gray-400">{emptyText}</div>;
   return (
     <div className="ios-card overflow-x-auto rounded-2xl">
@@ -75,6 +77,7 @@ const ItemTable: React.FC<ItemTableProps> = ({ items, rules, accountNickname, fo
                 <div className="flex justify-end gap-1.5">
                   <button type="button" onClick={/* 点击打开该商品的发货规则配置。 */ () => onConfigureDelivery(item)} className="inline-flex items-center gap-1 rounded-lg bg-contrast px-2.5 py-1.5 font-bold text-on-contrast hover:bg-contrast/90"><Link2 className="h-3 w-3" />发货规则</button>
                   {onOpenStock && <button type="button" onClick={/* 点击打开该商品的库存调整。 */ () => onOpenStock(item)} className="rounded-lg bg-gray-100 px-2.5 py-1.5 font-bold text-gray-600 hover:bg-brand hover:text-white" aria-label={`调整库存：${item.item_title || item.item_id}`}>库存</button>}
+                  {onOpenExternalStock && <button type="button" onClick={/* 点击打开该商品的外部库存配置。 */ () => onOpenExternalStock(item)} className="rounded-lg bg-gray-100 px-2.5 py-1.5 font-bold text-gray-600 hover:bg-brand hover:text-white" aria-label={`外部库存：${item.item_title || item.item_id}`}>外部库存</button>}
                   <button type="button" onClick={/* 点击编辑商品。 */ () => onEdit(item)} className="rounded-lg bg-gray-100 p-1.5 text-gray-600 hover:bg-brand hover:text-white" title="编辑" aria-label="编辑"><Edit className="h-3.5 w-3.5" /></button>
                   <button type="button" onClick={/* 点击删除商品。 */ () => onDelete(item)} className="rounded-lg bg-gray-100 p-1.5 text-red-500 hover:bg-red-100" title="删除" aria-label="删除"><Trash2 className="h-3.5 w-3.5" /></button>
                 </div>

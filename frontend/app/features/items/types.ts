@@ -4,6 +4,7 @@ import type { PublishImagesEditorProps } from './components/PublishImagesEditor'
 import type { PublishSpecsEditorProps } from '../../../shared/ui/publish/PublishSpecsEditor';
 import type { ItemAISettingsModalProps } from './components/ItemAISettingsModal';
 import type { ItemStockModalProps } from './components/ItemStockModal';
+import type { ExternalStockModalProps } from './components/ExternalStockModal';
 import type { PublishLocation } from './api';
 
 // ItemListProps 描述商品页面从父级接收的规则配置回调。
@@ -18,6 +19,8 @@ export interface ItemListProps {
   itemAISettingsModal?: ComponentType<ItemAISettingsModalProps>;
   // itemStockModal 是应用壳按需注入的商品库存调整弹窗；缺省时不显示库存入口。
   itemStockModal?: ComponentType<ItemStockModalProps>;
+  // externalStockModal 是应用壳按需注入的外部库存配置弹窗；缺省时不显示入口。
+  externalStockModal?: ComponentType<ExternalStockModalProps>;
   // libraryImagePicker 是应用壳按需注入的图片库选择器，缺省时单品发布不显示图片库入口。
   libraryImagePicker?: ComponentType<LibraryImagePickerSlotProps>;
 }

@@ -1,4 +1,4 @@
-import type { PublishLocation } from './models';
+import type { ExternalStockCheckResult, ExternalStockConfig, ExternalStockHeaderDraft, PublishLocation } from './models';
 import {
 AccountDetail,
 BatchCancelResponse,
@@ -85,6 +85,142 @@ export const getItemAISettings = async (cookieId: string, itemId: string, option
     }), options);
     return { ai_override: response.ai_override, item_context: response.item_context };
 }
+
+/** ExternalStockHeaderTransport 是接口返回的请求头名称，不含明文值。 */
+interface ExternalStockHeaderTransport {
+  /** 请求头名称。 */
+  name: string;
+  /** 服务端是否保存了值。 */
+  set: boolean;
+}
+
+/** ExternalStockTransport 是外部库存接口返回的非秘密字段。 */
+interface ExternalStockTransport {
+  /** 是否启用。 */
+  enabled: boolean;
+  /** 外部库存地址。 */
+  source_url: string;
+  /** 可用库存路径。 */
+  json_path: string;
+  /** 超时秒数。 */
+  timeout_seconds: number;
+  /** 自定义 User-Agent。 */
+  user_agent: string;
+  /** 五段 cron。 */
+  cron: string;
+  /** IANA 时区。 */
+  timezone: string;
+  /** 周期分钟数。 */
+  interval_minutes: number;
+  /** 是否演练。 */
+  dry_run: boolean;
+  /** 是否同步平台库存。 */
+  sync_platform_stock: boolean;
+  /** 库存上限。 */
+  stock_cap: number;
+  /** 已保存请求头名称。 */
+  headers: ExternalStockHeaderTransport[];
+  /** 上次检查时间。 */
+  last_checked_unix: number;
+  /** 上次可用库存。 */
+  last_available?: number | null;
+  /** 上次动作。 */
+  last_action: string;
+  /** 上次状态。 */
+  last_status: string;
+  /** 上次错误。 */
+  last_error: string;
+  /** 退避结束时间。 */
+  backoff_until_unix: number;
+  /** 退避类别。 */
+  backoff_class: string;
+}
+
+// externalStockFromResponse 把契约响应转换成不含请求头明文的界面模型。
+const externalStockFromResponse = (response: ExternalStockTransport): ExternalStockConfig => ({
+  enabled: response.enabled,
+  sourceUrl: response.source_url,
+  jsonPath: response.json_path,
+  timeoutSeconds: response.timeout_seconds,
+  userAgent: response.user_agent,
+  cron: response.cron,
+  timezone: response.timezone,
+  intervalMinutes: response.interval_minutes,
+  dryRun: response.dry_run,
+  syncPlatformStock: response.sync_platform_stock,
+  stockCap: response.stock_cap,
+  headers: response.headers.map(/* header 是只含名称的已保存请求头。 */ header => ({ name: header.name, set: header.set })),
+  lastCheckedUnix: response.last_checked_unix,
+  lastAvailable: response.last_available ?? null,
+  lastAction: response.last_action,
+  lastStatus: response.last_status,
+  lastError: response.last_error,
+  backoffUntilUnix: response.backoff_until_unix,
+  backoffClass: response.backoff_class,
+});
+
+// getItemExternalStock 读取商品外部库存配置。响应不包含请求头明文。
+export const getItemExternalStock = async (cookieId: string, itemId: string, options?: RequestControlOptions): Promise<ExternalStockConfig> => {
+  // response 是生成契约约束的外部库存配置。
+  const response = await runContractRequest(/* signal 控制外部库存配置读取的取消和超时。 */ signal => contractClient.GET('/api/v1/items/{cookie_id}/{item_id}/external-stock', {
+    params: { path: { cookie_id: cookieId, item_id: itemId } },
+    signal,
+  }), options);
+  return externalStockFromResponse(response);
+};
+
+// updateItemExternalStock 保存配置。请求头值只在这次请求里发送，返回结果仍然不含明文。
+export const updateItemExternalStock = async (cookieId: string, itemId: string, config: ExternalStockConfig, headers: ExternalStockHeaderDraft[], options?: RequestControlOptions): Promise<ExternalStockConfig> => {
+  // response 是保存后的非秘密配置。
+  const response = await runContractRequest(/* signal 控制外部库存配置保存的取消和超时。 */ signal => contractClient.PUT('/api/v1/items/{cookie_id}/{item_id}/external-stock', {
+    params: { path: { cookie_id: cookieId, item_id: itemId } },
+    body: {
+      enabled: config.enabled,
+      source_url: config.sourceUrl,
+      json_path: config.jsonPath,
+      timeout_seconds: config.timeoutSeconds,
+      user_agent: config.userAgent,
+      cron: config.cron,
+      timezone: config.timezone,
+      interval_minutes: config.intervalMinutes,
+      dry_run: config.dryRun,
+      sync_platform_stock: config.syncPlatformStock,
+      stock_cap: config.stockCap,
+      headers: headers.map(/* header 是本次要保存的一条请求头草稿。 */ header => ({ name: header.name, value: header.value, keep: header.keep })),
+    },
+    signal,
+  }), options);
+  return externalStockFromResponse(response);
+};
+
+/** ExternalStockCheckMode 区分演练、按已保存开关检查，以及只执行一次真实操作。 */
+export type ExternalStockCheckMode = 'preview' | 'saved' | 'execute_once';
+
+// checkItemExternalStock 立即检查商品。execute_once 只这一次真实执行，不修改已保存演练。
+export const checkItemExternalStock = async (cookieId: string, itemId: string, mode: ExternalStockCheckMode, options?: RequestControlOptions): Promise<ExternalStockCheckResult> => {
+  // body 是这一次检查的显式模式。saved 不能关闭已保存的演练开关。
+  const body = mode === 'execute_once' ? { execute_once: true } : { dry_run: mode === 'preview' };
+  // response 是一次检查的非秘密结果。
+  const response = await runContractRequest(/* signal 控制立即检查的取消和超时。 */ signal => contractClient.POST('/api/v1/items/{cookie_id}/{item_id}/external-stock/check', {
+    params: { path: { cookie_id: cookieId, item_id: itemId } },
+    body,
+    signal,
+  }), { timeoutMs: 90_000, ...options });
+  return {
+    action: response.action,
+    status: response.status,
+    available: response.available ?? null,
+    message: response.message,
+    dryRun: response.dry_run,
+    listingState: response.listing_state,
+    platformOutcome: response.platform_outcome ?? '',
+    readItemStatus: response.read_item_status ?? '',
+    readQuantity: response.read_quantity ?? 0,
+    stockAdjusted: response.stock_adjusted ?? false,
+    platformRet: response.platform_ret ?? '',
+    config: externalStockFromResponse(response.config),
+  };
+};
 
 // updateItemAISettings 保存单件商品的 AI 覆盖状态和专属资料。
 export const updateItemAISettings = async (cookieId: string, itemId: string, settings: ItemAISettings, options?: RequestControlOptions): Promise<ItemAISettings> => {

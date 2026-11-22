@@ -457,6 +457,8 @@ type ApplicationPorts struct {
 	itemStock ItemStockPort
 	// itemAISettings 是商品级 AI 配置用例。
 	itemAISettings ItemAISettingsPort
+	// itemExternalStock 是商品外部库存同步用例。
+	itemExternalStock ItemExternalStockPort
 	// accountLogin 是 Cookie 与二维码登录用例 Port。
 	accountLogin AccountLoginPort
 	// qrLogin 是二维码平台流程用例 Port。
@@ -546,6 +548,7 @@ type ApplicationPortsInput struct {
 	ItemPlatformLifecycle       ItemPlatformLifecyclePort
 	ItemStock                   ItemStockPort
 	ItemAISettings              ItemAISettingsPort
+	ItemExternalStock           ItemExternalStockPort
 	AccountLogin                AccountLoginPort
 	QRLogin                     QRLoginPort
 	SessionRecovery             SessionRecoveryPort
@@ -593,7 +596,7 @@ func NewApplicationPorts(input ApplicationPortsInput) *ApplicationPorts {
 		itemSinglePublish: input.ItemSinglePublish, itemBatchPreview: input.ItemBatchPreview,
 		itemBatchManagement: input.ItemBatchManagement, itemCategoryRecommendation: input.ItemCategoryRecommendation,
 		itemBatchPreviewPersistence: input.ItemBatchPreviewPersistence, itemBatchLocalPublish: input.ItemBatchLocalPublish,
-		itemSync: input.ItemSync, itemCatalog: input.ItemCatalog, itemCatalogMutation: input.ItemCatalogMutation, itemPlatformLifecycle: input.ItemPlatformLifecycle, itemStock: input.ItemStock, itemAISettings: input.ItemAISettings,
+		itemSync: input.ItemSync, itemCatalog: input.ItemCatalog, itemCatalogMutation: input.ItemCatalogMutation, itemPlatformLifecycle: input.ItemPlatformLifecycle, itemStock: input.ItemStock, itemAISettings: input.ItemAISettings, itemExternalStock: input.ItemExternalStock,
 		accountLogin: input.AccountLogin, qrLogin: input.QRLogin, sessionRecovery: input.SessionRecovery,
 		platformCredentials: input.PlatformCredentials, authentication: input.Authentication, loginAudit: input.LoginAudit,
 		passwordLogin: input.PasswordLogin, accountDelete: input.AccountDelete, accountProfile: input.AccountProfile,
@@ -622,7 +625,7 @@ func (ports *ApplicationPorts) validate() error {
 		{"orders", ports.orders}, {"order_refresh_jobs", ports.orderRefreshJobs}, {"item_single_publish", ports.itemSinglePublish},
 		{"item_batch_preview", ports.itemBatchPreview}, {"item_batch_management", ports.itemBatchManagement}, {"item_category_recommendation", ports.itemCategoryRecommendation},
 		{"item_batch_preview_persistence", ports.itemBatchPreviewPersistence}, {"item_batch_local_publish", ports.itemBatchLocalPublish}, {"item_sync", ports.itemSync},
-		{"item_catalog", ports.itemCatalog}, {"item_catalog_mutation", ports.itemCatalogMutation}, {"item_platform_lifecycle", ports.itemPlatformLifecycle}, {"item_stock", ports.itemStock}, {"item_ai_settings", ports.itemAISettings}, {"account_login", ports.accountLogin},
+		{"item_catalog", ports.itemCatalog}, {"item_catalog_mutation", ports.itemCatalogMutation}, {"item_platform_lifecycle", ports.itemPlatformLifecycle}, {"item_stock", ports.itemStock}, {"item_ai_settings", ports.itemAISettings}, {"item_external_stock", ports.itemExternalStock}, {"account_login", ports.accountLogin},
 		{"qr_login", ports.qrLogin}, {"session_recovery", ports.sessionRecovery}, {"platform_credentials", ports.platformCredentials},
 		{"authentication", ports.authentication}, {"login_audit", ports.loginAudit}, {"password_login", ports.passwordLogin},
 		{"account_delete", ports.accountDelete}, {"account_profile", ports.accountProfile}, {"account_long_login", ports.accountLongLogin}, {"credential_verification", ports.credentialVerification},
@@ -683,6 +686,11 @@ func (server *Server) itemCatalogMutationApplication() ItemCatalogMutationPort {
 // itemAISettingsApplication 返回商品级 AI 配置用例。
 func (server *Server) itemAISettingsApplication() ItemAISettingsPort {
 	return server.applicationServiceSet().itemAISettings
+}
+
+// itemExternalStockApplication 返回商品外部库存同步用例。
+func (server *Server) itemExternalStockApplication() ItemExternalStockPort {
+	return server.applicationServiceSet().itemExternalStock
 }
 
 // itemSyncApplication 返回商品同步用例。

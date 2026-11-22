@@ -20,6 +20,9 @@ type relistRepoStub struct {
 	// userID、userErr 是账号归属用户及读取错误。
 	userID  int64
 	userErr error
+	// external、externalErr 表示商品启用外部库存及读取错误。
+	external    bool
+	externalErr error
 }
 
 // AutoRelistEnabled 返回预设开关。
@@ -35,6 +38,11 @@ func (r relistRepoStub) AccountUserID(context.Context, string) (int64, error) {
 // OwnsItem 返回预设商品归属。
 func (r relistRepoStub) OwnsItem(context.Context, string, string) (bool, error) {
 	return r.owned, r.ownedErr
+}
+
+// ExternalStockEnabled 返回预设的外部库存开关。
+func (r relistRepoStub) ExternalStockEnabled(context.Context, string, string) (bool, error) {
+	return r.external, r.externalErr
 }
 
 // relistPlatformStub 记录平台调用次数并返回预设结果。
@@ -169,5 +177,23 @@ func TestAutoRelistConstructionAndGuards(t *testing.T) {
 	}
 	if len(service.seen) > autoRelistSeenLimit {
 		t.Fatalf("去重表应有容量上限: %d", len(service.seen))
+	}
+}
+
+// TestAutoRelistSkipsExternalStock 验证启用外部库存的商品不会被售出后自动上架补回库存。
+func TestAutoRelistSkipsExternalStock(t *testing.T) {
+	// platform 记录是否错误地调用了重新上架。
+	platform := &relistPlatformStub{}
+	// logs 应说明跳过原因。
+	_, logs := runRelist(t, relistRepoStub{enabled: true, owned: true, userID: 1, external: true}, platform, "order-ext")
+	if platform.calls != 0 || !strings.Contains(logs, "外部库存") {
+		t.Fatalf("calls=%d logs=%s", platform.calls, logs)
+	}
+	// failed 是外部库存开关读取失败的场景，同样不能上架。
+	failed := &relistPlatformStub{}
+	// failLogs 是开关读取失败时的日志，应说明已跳过自动上架。
+	_, failLogs := runRelist(t, relistRepoStub{enabled: true, owned: true, userID: 1, externalErr: errors.New("db")}, failed, "order-err")
+	if failed.calls != 0 || !strings.Contains(failLogs, "外部库存") {
+		t.Fatalf("失败时不应上架 calls=%d logs=%s", failed.calls, failLogs)
 	}
 }

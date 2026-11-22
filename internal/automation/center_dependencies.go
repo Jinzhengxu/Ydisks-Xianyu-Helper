@@ -20,4 +20,6 @@ type CenterDependencies struct {
 	CookieSource func(context.Context, string) (string, error)
 	// APICardFetcher 提供普通 API 卡发货请求能力；为空时 API 卡执行会明确失败。
 	APICardFetcher APICardFetcher
+	// PaidDeliveryObserver 在付款发货运行成功后收到一次通知。实现必须尽快返回，不得在此访问平台。
+	PaidDeliveryObserver func(accountID, itemID, orderID string)
 }

@@ -42,6 +42,12 @@ func itemScope(method, path string) (string, bool) {
 	switch {
 	case (method == http.MethodGet || method == http.MethodPut) && exactSegments("/api/v1/items/", 3) && strings.HasSuffix(path, "/ai-settings"):
 		return apikey.ScopeRepliesManage, true
+	case method == http.MethodGet && exactSegments("/api/v1/items/", 3) && strings.HasSuffix(path, "/external-stock"):
+		return apikey.ScopeItemsRead, true
+	case method == http.MethodPut && exactSegments("/api/v1/items/", 3) && strings.HasSuffix(path, "/external-stock"):
+		return apikey.ScopeItemsExternalStock, true
+	case method == http.MethodPost && exactSegments("/api/v1/items/", 4) && strings.HasSuffix(path, "/external-stock/check"):
+		return apikey.ScopeItemsExternalStock, true
 	case method == http.MethodGet && (path == "/api/v1/items" || path == "/api/v1/items/publish-batches" || exactSegments("/api/v1/items/publish-batches/", 1) || (exactSegments("/api/v1/items/publish-batches/", 2) && strings.HasSuffix(path, "/result.csv")) || exactSegments("/api/v1/items/", 2)):
 		return apikey.ScopeItemsRead, true
 	case method == http.MethodPost && (path == "/api/v1/items/get-all-from-account" || path == "/api/v1/items/get-by-page" || path == "/api/v1/items/publish-categories/recommend"):

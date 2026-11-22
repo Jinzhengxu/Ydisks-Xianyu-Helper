@@ -74,6 +74,8 @@ func BuildRuntime(options RuntimeOptions, infrastructure RuntimeInfrastructure) 
 	runtimeBundle, bundleErr := adapter.NewRuntimeBundle(infrastructure.Store, browserManager, infrastructure.Logger, initialOrderSync,
 		adapter.RuntimeBundleOptions{PublicBaseURL: options.PublicBaseURL, SoldItemRelist: func(ctx context.Context, accountID, itemID, orderID string) {
 			services.RelistSoldItem(ctx, accountID, itemID, orderID) // services 为 nil（尚未装配）时方法直接返回
+		}, ExternalStockAfterDelivery: func(accountID, itemID, orderID string) {
+			services.NotifyExternalStockDelivery(accountID, itemID, orderID)
 		}})
 	if bundleErr != nil {
 		return Runtime{}, fmt.Errorf("构造账号运行时依赖失败: %w", bundleErr)

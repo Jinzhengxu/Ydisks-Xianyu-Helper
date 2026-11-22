@@ -96,6 +96,14 @@ func (d *ItemDependencies) NewItemCatalogRepository() *ItemCatalogRepository {
 	return NewItemCatalogRepository(d.store)
 }
 
+// NewExternalStockRepository 创建外部库存配置仓储。
+func (d *ItemDependencies) NewExternalStockRepository() *ExternalStockRepository {
+	if d == nil {
+		return nil
+	}
+	return NewExternalStockRepository(d)
+}
+
 // NewItemAISettingsRepository 创建商品级 AI 配置仓储。
 func (d *ItemDependencies) NewItemAISettingsRepository() *ItemAISettingsRepository {
 	if d == nil {

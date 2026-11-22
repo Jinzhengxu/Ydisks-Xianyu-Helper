@@ -40,6 +40,8 @@ type AutoRelistRepository interface {
 	AccountUserID(ctx context.Context, cookieID string) (int64, error)
 	// OwnsItem 返回商品是否属于该账号（含已被同步标记删除的已售商品）。
 	OwnsItem(ctx context.Context, cookieID, itemID string) (bool, error)
+	// ExternalStockEnabled 返回该商品是否改由外部库存决定上下架。读取失败时调用方应停止自动上架。
+	ExternalStockEnabled(ctx context.Context, cookieID, itemID string) (bool, error)
 }
 
 // AutoRelistPlatform 是自动上架使用的平台端口，一次调用最多两次平台请求且不重试。
@@ -117,6 +119,16 @@ func (service *AutoRelistService) HandlePaid(ctx context.Context, cookieID, item
 	}
 	if !owned {
 		service.logger.InfoContext(ctx, "自动上架跳过：商品不属于该账号或尚未同步", "account", account, "item_id", item, "order_id", order)
+		return
+	}
+	// external、externalErr 表示商品启用了外部库存；启用时禁止把售罄库存补回 1。
+	external, externalErr := service.repository.ExternalStockEnabled(ctx, account, item)
+	if externalErr != nil {
+		service.logger.WarnContext(ctx, "读取外部库存开关失败，已跳过自动上架", "account", account, "item_id", item, "err", externalErr)
+		return
+	}
+	if external {
+		service.logger.InfoContext(ctx, "自动上架跳过：商品由外部库存决定上下架", "account", account, "item_id", item, "order_id", order)
 		return
 	}
 	if !service.claim(order) {

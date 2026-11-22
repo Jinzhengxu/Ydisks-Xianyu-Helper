@@ -69,6 +69,8 @@ type Services struct {
 	itemStock *itemapp.ItemStockService
 	// itemAutoRelist 是售出后自动上架应用服务，仅供运行时付款事件回调使用。
 	itemAutoRelist *itemapp.AutoRelistService
+	// itemExternalStock 按商品的外部库存下架或重新上架原商品。
+	itemExternalStock *itemapp.ExternalStockService
 	// itemBatchCoordinator 是商品批量发布 worker、恢复扫描和关闭等待的生命周期拥有者。
 	itemBatchCoordinator *itemapp.BatchWorkerCoordinator
 	// itemBatchPreview 是商品批量发布表格预检应用服务。
@@ -276,6 +278,17 @@ func (services *Services) LifecycleComponents() []lifecycleapp.NamedComponent {
 			},
 		})
 	}
+	if services.itemExternalStock != nil {
+		// externalStock 保存外部库存调度器，由协调器取消并等待。
+		externalStock := services.itemExternalStock
+		components = append(components, lifecycleapp.NamedComponent{
+			Name: "external-stock",
+			Component: lifecycleapp.FuncComponent{
+				StartFunc: externalStock.Start,
+				CloseFunc: externalStock.Close,
+			},
+		})
+	}
 	if services.orderReconciliationRecovery != nil {
 		// coordinator 保存订单补偿扫描生命周期协调器。
 		coordinator := services.orderReconciliationRecovery
@@ -307,6 +320,14 @@ func (services *Services) RefreshRuntimeAccount(ctx context.Context, accountID s
 	// refreshErr 保存订单同步失败原因；同步摘要已通过持久化完成，无需在连接回调中返回给 HTTP。
 	_, refreshErr := services.orders.Refresh.RefreshRuntimeAccount(ctx, accountID)
 	return refreshErr
+}
+
+// NotifyExternalStockDelivery 在付款发货成功后触发该商品的外部库存检查。回调必须尽快返回。
+func (services *Services) NotifyExternalStockDelivery(accountID, itemID, orderID string) {
+	if services == nil || services.itemExternalStock == nil {
+		return
+	}
+	services.itemExternalStock.AfterPaidDelivery(accountID, itemID, orderID)
 }
 
 // RelistSoldItem 在 WebSocket 付款事件后按账号开关把已售商品重新上架。
@@ -349,29 +370,31 @@ type TransportPorts struct {
 	ItemCatalog                 *itemapp.CatalogService
 	ItemCatalogMutation         *itemapp.CatalogMutationService
 	ItemAISettings              *itemapp.ItemAISettingsService
-	AccountLogin                AccountLogin
-	QRLogin                     adapter.QRLoginService
-	PlatformCredentials         *accountapp.PlatformCredentialService
-	Authentication              *accountapp.AuthenticationService
-	LoginAudit                  *accountapp.LoginAuditService
-	PasswordLogin               *accountapp.PasswordLoginService
-	AccountDelete               *accountapp.DeleteService
-	AccountProfile              *accountapp.ProfileService
-	AccountLongLogin            *accountapp.LongLoginService
-	CredentialVerification      *accountapp.CredentialVerificationService
-	AccountSettings             *accountapp.SettingsService
-	AccountRuntime              *accountapp.RuntimeService
-	AccountSummaries            *accountapp.SummaryService
-	AccountTasks                *automationapp.Service
-	Chat                        *chatapp.Service
-	UncertainNotifications      *notificationsapp.Service
-	NotificationChannels        *notificationsapp.ChannelService
-	Analytics                   *analyticsapp.Service
-	AutomationIssues            *automationapp.IssueService
-	AutomationAudit             *automationapp.AuditService
-	AutomationRules             *automationapp.RuleService
-	DeliveryTemplates           *deliveryapp.Service
-	Cards                       *cardsapp.Service
+	// ItemExternalStock 是按外部库存同步原商品上下架的用例。
+	ItemExternalStock      *itemapp.ExternalStockService
+	AccountLogin           AccountLogin
+	QRLogin                adapter.QRLoginService
+	PlatformCredentials    *accountapp.PlatformCredentialService
+	Authentication         *accountapp.AuthenticationService
+	LoginAudit             *accountapp.LoginAuditService
+	PasswordLogin          *accountapp.PasswordLoginService
+	AccountDelete          *accountapp.DeleteService
+	AccountProfile         *accountapp.ProfileService
+	AccountLongLogin       *accountapp.LongLoginService
+	CredentialVerification *accountapp.CredentialVerificationService
+	AccountSettings        *accountapp.SettingsService
+	AccountRuntime         *accountapp.RuntimeService
+	AccountSummaries       *accountapp.SummaryService
+	AccountTasks           *automationapp.Service
+	Chat                   *chatapp.Service
+	UncertainNotifications *notificationsapp.Service
+	NotificationChannels   *notificationsapp.ChannelService
+	Analytics              *analyticsapp.Service
+	AutomationIssues       *automationapp.IssueService
+	AutomationAudit        *automationapp.AuditService
+	AutomationRules        *automationapp.RuleService
+	DeliveryTemplates      *deliveryapp.Service
+	Cards                  *cardsapp.Service
 	// APICardTester 是卡券 API 测试请求应用端口。
 	APICardTester          cardsapp.APIRequestTester
 	PublishAutomationRules *automationapp.PublishRuleService
@@ -398,7 +421,7 @@ func (services *Services) TransportPorts() TransportPorts {
 		ItemBatchPreview: services.itemBatchPreview, ItemBatchManagement: services.itemBatchManagement,
 		ItemCategoryRecommendation: services.itemCategoryRecommendation, ItemBatchPreviewPersistence: services.itemBatchPreviewPersistence,
 		ItemBatchLocalPublish: services.itemBatchLocalPublish, ItemSync: services.itemSync, ItemCatalog: services.itemCatalog,
-		ItemCatalogMutation: services.itemCatalogMutation, ItemAISettings: services.itemAISettings, AccountLogin: services.accountLogin, QRLogin: services.qrLogin,
+		ItemCatalogMutation: services.itemCatalogMutation, ItemAISettings: services.itemAISettings, ItemExternalStock: services.itemExternalStock, AccountLogin: services.accountLogin, QRLogin: services.qrLogin,
 		PlatformCredentials: services.platformCredentials, Authentication: services.authentication, LoginAudit: services.loginAudit,
 		PasswordLogin: services.passwordLogin, AccountDelete: services.accountDelete, AccountProfile: services.accountProfile,
 		AccountLongLogin: services.accountLongLogin, CredentialVerification: services.credentialVerification, AccountSettings: services.accountSettings, AccountRuntime: services.accountRuntime,
@@ -534,6 +557,7 @@ func New(dependencies Dependencies) (*Services, error) {
 		itemPlatformLifecycle:       catalogServices.platformLifecycle,
 		itemStock:                   catalogServices.stock,
 		itemAutoRelist:              catalogServices.autoRelist,
+		itemExternalStock:           catalogServices.externalStock,
 		itemBatchCoordinator:        batchServices.coordinator,
 		itemBatchPreview:            batchServices.preview,
 		itemBatchManagement:         batchServices.management,

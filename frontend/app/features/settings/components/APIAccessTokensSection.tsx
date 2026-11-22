@@ -24,6 +24,7 @@ const scopeOptions: APIAccessScopeOption[] = [
   { value: 'items:read', label: '商品与发布结果读取', description: '读取商品、同步商品列表及批量发布结果' },
   { value: 'items:publish', label: '商品发布', description: '单品发布、批量发布、取消任务与失败重试' },
   { value: 'items:unpublish', label: '商品平台下架', description: '在闲鱼平台下架当前用户拥有的商品，不删除商品' },
+  { value: 'items:external-stock', label: '外部库存同步', description: '配置商品外部库存来源，并据此下架或重新上架原商品' },
   { value: 'orders:read', label: '订单读取', description: '读取订单列表和详情（包含收件人姓名、电话和地址），不包含已发货卡密' },
   { value: 'chat:read', label: '聊天读取', description: '读取聊天会话、消息、商品上下文、快捷回复与买家备注' },
   { value: 'chat:send', label: '发送客服消息', description: '通过现有聊天接口向买家发送文本消息；发送后沿用现有人工介入识别' },
