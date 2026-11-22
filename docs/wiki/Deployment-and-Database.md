@@ -45,7 +45,8 @@ Docker tags:
 | `dev` branch | `dev`, `sha-<full-commit>` | No; for daily debugging. |
 | `v1.2.3` tag | `v1.2.3`, `1.2.3`, `1.2`, `latest`, `sha-<full-commit>` | Yes. |
 
-The current Docker workflow has a branch-push entry only for `dev`; `main` does not build a branch image but remains the base branch for release tags. `latest` changes only during approved release publication, not on every `dev` commit. Pin production to `v1.2.3`, `1.2.3`, or a SHA tag; Compose uses `latest` by default.
+The current Docker workflow has a branch-push entry only for `dev`; `main` does not build a branch image but remains the base branch for release tags.
+Manually running “构建并发布 Docker 镜像” in Actions accepts an extra `image_tag` (for example `external-stock`). The image name is `ghcr.io/` plus the lower-case repository name, and authentication uses only `GITHUB_TOKEN`. A fork therefore publishes to its own GHCR and does not replace the upstream image. `latest` changes only during approved release publication, not on every `dev` commit. Pin production to `v1.2.3`, `1.2.3`, or a SHA tag; Compose uses `latest` by default.
 
 The Windows and macOS signing steps in the desktop CI (`desktop-cd.yml`, which runs on `dev` pushes, manual dispatch, and formal releases) require the corresponding signing-certificate Secrets. Without them, those platform builds fail at signing. Linux packages do not require desktop signing certificates.
 

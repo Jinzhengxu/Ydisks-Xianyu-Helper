@@ -120,6 +120,84 @@ export interface Item {
 /** 商品级 AI 配置支持的三态覆盖策略。 */
 export type ItemAIOverride = 'inherit' | 'enabled' | 'disabled';
 
+/** 外部库存配置里已保存的请求头名称，不包含明文值。 */
+export interface ExternalStockHeaderName {
+  /** 请求头名称。 */
+  name: string;
+  /** 服务端是否保存了值。 */
+  set: boolean;
+}
+
+/** 保存外部库存请求头时提交的一条草稿。value 只在本次保存请求中发送。 */
+export interface ExternalStockHeaderDraft {
+  /** 请求头名称。 */
+  name: string;
+  /** 新的明文值；留空且 keep 为真时保留旧值。 */
+  value: string;
+  /** 是否保留已保存的秘密值。 */
+  keep: boolean;
+}
+
+/** 商品外部库存配置的界面模型，不含请求头明文。 */
+export interface ExternalStockConfig {
+  /** 是否启用该商品的外部库存同步。 */
+  enabled: boolean;
+  /** 返回可用库存的地址。 */
+  sourceUrl: string;
+  /** 可用库存的点分路径。 */
+  jsonPath: string;
+  /** 外部请求超时秒数。 */
+  timeoutSeconds: number;
+  /** 自定义 User-Agent，空表示使用默认桌面浏览器标识。 */
+  userAgent: string;
+  /** 五段 cron。 */
+  cron: string;
+  /** IANA 时区。 */
+  timezone: string;
+  /** 周期检查间隔分钟数，0 表示只按 cron。 */
+  intervalMinutes: number;
+  /** 自动检查是否只演练。 */
+  dryRun: boolean;
+  /** 是否把平台库存同步为外部可用数。 */
+  syncPlatformStock: boolean;
+  /** 同步到平台的库存上限。 */
+  stockCap: number;
+  /** 已保存的请求头名称。 */
+  headers: ExternalStockHeaderName[];
+  /** 上次检查的 Unix 秒，0 表示尚未检查。 */
+  lastCheckedUnix: number;
+  /** 上次成功读到的可用库存。 */
+  lastAvailable: number | null;
+  /** 上次动作。 */
+  lastAction: string;
+  /** 上次状态。 */
+  lastStatus: string;
+  /** 上次可展示错误。 */
+  lastError: string;
+  /** 退避结束的 Unix 秒。 */
+  backoffUntilUnix: number;
+  /** 退避类别。 */
+  backoffClass: string;
+}
+
+/** 一次外部库存检查的界面结果。 */
+export interface ExternalStockCheckResult {
+  /** 决策动作。 */
+  action: string;
+  /** 结果状态。 */
+  status: string;
+  /** 本次可用库存。 */
+  available: number | null;
+  /** 给用户看的说明。 */
+  message: string;
+  /** 是否没有写平台。 */
+  dryRun: boolean;
+  /** 检查时的在售状态。 */
+  listingState: string;
+  /** 检查后的配置。 */
+  config: ExternalStockConfig;
+}
+
 /** 由商品级 AI 配置接口归一后的 UI 模型。 */
 export interface ItemAISettings {
   /** 商品级 AI 启停覆盖策略。 */

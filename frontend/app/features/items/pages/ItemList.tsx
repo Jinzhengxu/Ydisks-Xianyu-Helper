@@ -58,7 +58,7 @@ const itemAIStatusClass: Record<ItemAIOverride, string> = {
 };
 
 // ItemList 渲染商品列表组件。
-const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesEditor: ImagesEditor, publishSpecsEditor: SpecsEditor, itemAISettingsModal: ItemAISettingsModal, itemStockModal: ItemStockModal, libraryImagePicker: LibraryPicker }) => {
+const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesEditor: ImagesEditor, publishSpecsEditor: SpecsEditor, itemAISettingsModal: ItemAISettingsModal, itemStockModal: ItemStockModal, externalStockModal: ExternalStockModal, libraryImagePicker: LibraryPicker }) => {
   // libraryPickerOpen 表示单品发布的图片库选择器是否打开，属于瞬时 UI 状态。
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
   // [items, 解构得到当前 Hook 返回的状态和操作函数。
@@ -81,6 +81,8 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
   const [itemAISettingsTarget, setItemAISettingsTarget] = useState<Item | null>(null);
   // [itemStockTarget, setItemStockTarget] 保存当前打开库存调整的商品；只有用户点击才会触发库存读取。
   const [itemStockTarget, setItemStockTarget] = useState<Item | null>(null);
+  // [externalStockTarget, setExternalStockTarget] 保存当前打开外部库存配置的商品；只有用户点击才会读取配置。
+  const [externalStockTarget, setExternalStockTarget] = useState<Item | null>(null);
   // itemsRequestGeneration 标识商品列表最新一次读取，旧响应不得覆盖较新的同步或刷新结果。
   const itemsRequestGeneration = useRef(0);
   // shippingRulesRequestGeneration 标识发货规则最新一次读取，旧响应不得覆盖较新的规则配置。
@@ -418,6 +420,7 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
             onConfigureDelivery={onConfigureDelivery}
             onOpenAISettings={setItemAISettingsTarget}
             onOpenStock={ItemStockModal ? setItemStockTarget : undefined}
+            onOpenExternalStock={ExternalStockModal ? setExternalStockTarget : undefined}
             onEdit={handleEdit}
             onDelete={handleDelete}
             emptyText={ruleFilter ? '没有符合该规则筛选条件的商品' : accountFilter ? '该账号暂无商品数据' : '暂无商品数据，请选择账号进行同步'}
@@ -497,6 +500,11 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
                       {ItemStockModal && (
                         <button type="button" onClick={/* itemStockOpenHandler 仅在用户点击时打开弹窗并触发库存读取。 */ () => setItemStockTarget(item)} className="flex w-full items-center justify-between gap-2 rounded-lg bg-gray-100 px-2.5 py-2 text-[11px] font-extrabold text-gray-700 transition-colors hover:bg-gray-200" aria-label={`调整库存：${item.item_title || item.item_id}`}>
                           <span>调整库存</span>
+                        </button>
+                      )}
+                      {ExternalStockModal && (
+                        <button type="button" onClick={/* externalStockOpenHandler 仅在用户点击时打开弹窗并读取外部库存配置。 */ () => setExternalStockTarget(item)} className="flex w-full items-center justify-between gap-2 rounded-lg bg-gray-100 px-2.5 py-2 text-[11px] font-extrabold text-gray-700 transition-colors hover:bg-gray-200" aria-label={`外部库存：${item.item_title || item.item_id}`}>
+                          <span>外部库存</span>
                         </button>
                       )}
                       <button
@@ -1135,6 +1143,15 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
             item={itemStockTarget}
             open
             onClose={/* itemStockCloseHandler 关闭库存调整弹窗。 */ () => setItemStockTarget(null)}
+          />
+        </Suspense>
+      )}
+      {ExternalStockModal && externalStockTarget && (
+        <Suspense fallback={null}>
+          <ExternalStockModal
+            item={externalStockTarget}
+            open
+            onClose={/* externalStockCloseHandler 关闭外部库存弹窗并丢弃未保存草稿。 */ () => setExternalStockTarget(null)}
           />
         </Suspense>
       )}

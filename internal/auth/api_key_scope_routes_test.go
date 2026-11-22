@@ -39,6 +39,10 @@ func TestRequiredAPIKeyScopeCoversEveryAllowlistBranch(t *testing.T) {
 		{http.MethodPut, "/api/v1/items/publish", ""},
 		{http.MethodPost, "/api/v1/items/acc-1/item-1/delete", ""},
 		{http.MethodGet, "/api/v1/items/acc-1/item-1/unpublish", ""},
+		{http.MethodGet, "/api/v1/items/acc-1/item-1/external-stock", apikey.ScopeItemsRead},
+		{http.MethodPut, "/api/v1/items/acc-1/item-1/external-stock", apikey.ScopeItemsExternalStock},
+		{http.MethodPost, "/api/v1/items/acc-1/item-1/external-stock/check", apikey.ScopeItemsExternalStock},
+		{http.MethodDelete, "/api/v1/items/acc-1/item-1/external-stock", ""},
 		// 聊天读取只开放明确列出的 GET 入口。
 		{http.MethodGet, "/api/v1/chat/sessions", apikey.ScopeChatRead},
 		{http.MethodGet, "/api/v1/chat/items", apikey.ScopeChatRead},

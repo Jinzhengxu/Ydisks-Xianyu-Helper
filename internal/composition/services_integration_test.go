@@ -108,7 +108,7 @@ func buildTestServices(t *testing.T, provideChat bool) builtServices {
 	return builtServices{services: services, dependencies: dependencies, store: store}
 }
 
-// TestNewAssemblesServicesAndExposesTransportPorts 验证完整装配后每个 transport 端口都已就绪，生命周期组件登记三项且顺序稳定。
+// TestNewAssemblesServicesAndExposesTransportPorts 验证完整装配后每个 transport 端口都已就绪，生命周期组件登记四项且顺序稳定。
 func TestNewAssemblesServicesAndExposesTransportPorts(t *testing.T) {
 	// withChat 沿用运行时预装配的聊天应用。
 	withChat := buildTestServices(t, true)
@@ -127,7 +127,7 @@ func TestNewAssemblesServicesAndExposesTransportPorts(t *testing.T) {
 	for _, component := range components {
 		names = append(names, component.Name)
 	}
-	if strings.Join(names, ",") != "order-refresh-recovery,publish-batch-workers,order-reconciliation-recovery" {
+	if strings.Join(names, ",") != "order-refresh-recovery,publish-batch-workers,external-stock,order-reconciliation-recovery" {
 		t.Fatalf("names=%v", names)
 	}
 	// withoutChat 覆盖组合根现场创建聊天应用的兼容分支。

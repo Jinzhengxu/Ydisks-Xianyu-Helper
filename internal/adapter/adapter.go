@@ -171,6 +171,8 @@ type RuntimeBundleOptions struct {
 	PublicBaseURL string
 	// SoldItemRelist 是付款事件后的自动上架回调，由组合根注入；nil 表示不启用。
 	SoldItemRelist func(ctx context.Context, accountID, itemID, orderID string)
+	// ExternalStockAfterDelivery 在付款发货成功后通知外部库存检查；nil 表示不启用。实现必须尽快返回。
+	ExternalStockAfterDelivery func(accountID, itemID, orderID string)
 }
 
 // NewRuntimeBundle 在进程启动前一次性完成运行时闭环装配，禁止通过运行期 setter 补齐必需依赖。
@@ -212,9 +214,10 @@ func NewRuntimeBundle(store *db.Store, bm *browser.Manager, logger *slog.Logger,
 	automationSenders := NewAutomationImageSenderProvider(store, manager, func() mtop.Client { return mtop.NewClient() })
 	// autoCenter 依赖已构造但尚未启动的 manager 与 adapter，避免运行期形成部分可用状态。
 	autoCenter := automation.NewWithDependencies(store, automationSenders, logger, automation.CenterDependencies{
-		OrderDetailFetcher: runtimeAdapter,
-		Notifier:           notifier,
-		APICardFetcher:     newAPIDeliveryClient(store, logger),
+		OrderDetailFetcher:   runtimeAdapter,
+		Notifier:             notifier,
+		APICardFetcher:       newAPIDeliveryClient(store, logger),
+		PaidDeliveryObserver: bundleOptions.ExternalStockAfterDelivery,
 	})
 	runtimeAdapter.chat = chatService
 	runtimeAdapter.automation = autoCenter

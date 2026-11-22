@@ -147,6 +147,8 @@ type centerDependencies struct {
 	cookieSrc func(context.Context, string) (string, error)
 	// apiFetcher 提供普通 API 卡发货请求能力。
 	apiFetcher APICardFetcher
+	// paidDeliveryObserver 在付款发货成功后通知外部库存检查，必须尽快返回。
+	paidDeliveryObserver func(accountID, itemID, orderID string)
 }
 
 // New 构造使用默认协议实现的自动化中心。
@@ -182,12 +184,13 @@ func NewWithDependencies(store *db.Store, senders SenderProvider, logger *slog.L
 		store:   store,
 		senders: senders,
 		dependencies: centerDependencies{
-			mtop:              client,
-			accountTaskClient: accountTaskClient,
-			fetcher:           dependencies.OrderDetailFetcher,
-			notifier:          dependencies.Notifier,
-			cookieSrc:         dependencies.CookieSource,
-			apiFetcher:        dependencies.APICardFetcher,
+			mtop:                 client,
+			accountTaskClient:    accountTaskClient,
+			fetcher:              dependencies.OrderDetailFetcher,
+			notifier:             dependencies.Notifier,
+			cookieSrc:            dependencies.CookieSource,
+			apiFetcher:           dependencies.APICardFetcher,
+			paidDeliveryObserver: dependencies.PaidDeliveryObserver,
 		},
 		logger: logger.With("subsys", "automation"),
 	}
@@ -525,6 +528,15 @@ func (c *Center) executeRunActions(ctx context.Context, task Task, ruleID int64,
 // notifyResult 封装notify结果业务协调。
 func (c *Center) notifyResult(ctx context.Context, task Task, runID int64, status string, sent int, errMsg string) {
 	c.notifications.notifyResult(ctx, task, runID, status, sent, errMsg)
+	// observer 只在付款发货成功且商品标识完整时通知外部库存，不阻塞通知本身。
+	observer := c.dependencies.paidDeliveryObserver
+	if observer != nil && status == "success" && task.TriggerType == TriggerOrderPaid {
+		// account、item 是去掉空白后的账号和商品标识。
+		account, item := strings.TrimSpace(task.AccountID), strings.TrimSpace(task.ItemID)
+		if account != "" && item != "" {
+			observer(account, item, strings.TrimSpace(task.OrderID))
+		}
+	}
 }
 
 // notifyRunNeedsReview 封装notify运行NeedsReview业务协调。

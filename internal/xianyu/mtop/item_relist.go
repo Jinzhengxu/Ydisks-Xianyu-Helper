@@ -2,8 +2,12 @@ package mtop
 
 import (
 	"context"
+	"errors"
 	"strings"
 )
+
+// ErrItemMultiSpecExternalQuantity 表示不能把一个外部库存数写进多规格商品的每一行。
+var ErrItemMultiSpecExternalQuantity = errors.New("多规格商品不能按单一外部库存改写各规格库存")
 
 // itemStatusOnSale 是 editDetail/edit 中 itemStatus 表示“在售”的取值；下架为 "-2"。
 const itemStatusOnSale = "0"
@@ -99,6 +103,61 @@ func buildItemRelistPayload(detail *ItemEditDetail, itemID string) (map[string]a
 	}
 	return payload, restored, nil
 }
+
+// RelistItemWithQuantity 以最新详情为底重新上架，并把单规格库存设为 quantity。
+// 商品已在售且库存已经等于 quantity 时只读取、不提交。多规格商品直接拒绝，不修改平台数据。
+// 固定最多两次平台请求，失败不重试。
+func (c *ClientImpl) RelistItemWithQuantity(ctx context.Context, cookiesStr, itemID string, quantity int) (*ItemRelistResult, error) {
+	if quantity < 1 || quantity > itemStockMax {
+		return nil, ErrItemStockInvalid
+	}
+	// id 是规范化后的商品 ID。
+	id := strings.TrimSpace(itemID)
+	if id == "" {
+		return nil, ErrItemStockInvalid
+	}
+	// detail、err 保存提交前读取的最新快照。
+	detail, err := c.FetchItemEditDetail(ctx, cookiesStr, id)
+	if err != nil {
+		return nil, err
+	}
+	if detail.ItemID != id {
+		return nil, ErrItemEditDetailUnusable
+	}
+	if detail.MultiSpec {
+		return nil, ErrItemMultiSpecExternalQuantity
+	}
+	// result 是调用结果；读取阶段拿到的 Cookie 更新始终带回。
+	result := &ItemRelistResult{ItemID: id, UpdatedCookies: detail.UpdatedCookies}
+	if strings.TrimSpace(detail.Status) == itemStatusOnSale && detail.Quantity == quantity {
+		result.AlreadyOnSale = true
+		return result, nil
+	}
+	// payload 是改回在售并写入指定库存的全量覆盖载荷。
+	payload, _, err := buildItemRelistPayload(detail, id)
+	if err != nil {
+		return nil, err
+	}
+	payload["itemStatus"] = itemStatusOnSale
+	payload["quantity"] = typedLike(detail.raw["quantity"], quantity)
+	// cookies 是提交后累计更新的 Cookie。
+	_, _, cookies, err := c.submitItemEdit(ctx, cookiesStr, detail, id, payload)
+	if err != nil {
+		return nil, err
+	}
+	result.RestoredQuantity = detail.Quantity != quantity
+	result.UpdatedCookies = cookies
+	return result, nil
+}
+
+// ItemRelistQuantityClient 是按指定库存重新上架的可选扩展，避免扩大所有客户端替身。
+type ItemRelistQuantityClient interface {
+	// RelistItemWithQuantity 把原商品改回在售并设置单规格库存，固定最多两次平台请求。
+	RelistItemWithQuantity(ctx context.Context, cookiesStr, itemID string, quantity int) (*ItemRelistResult, error)
+}
+
+// 确保真实客户端实现按库存重新上架。
+var _ ItemRelistQuantityClient = (*ClientImpl)(nil)
 
 // ItemRelistClient 是商品重新上架的可选扩展接口，避免扩大所有 MTOP 客户端替身的基础契约。
 type ItemRelistClient interface {

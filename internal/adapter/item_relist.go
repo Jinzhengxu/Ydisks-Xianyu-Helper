@@ -87,6 +87,14 @@ func (r *AutoRelistRepository) OwnsItem(ctx context.Context, cookieID, itemID st
 	return r.store.Items.ExistsByCookieItem(ctx, cookieID, itemID)
 }
 
+// ExternalStockEnabled 返回商品是否启用外部库存。存储未就绪时视为读取失败，调用方会跳过自动上架。
+func (r *AutoRelistRepository) ExternalStockEnabled(ctx context.Context, cookieID, itemID string) (bool, error) {
+	if r == nil || r.store == nil || r.store.ItemExternalStock == nil {
+		return false, fmt.Errorf("外部库存仓储未初始化")
+	}
+	return r.store.ItemExternalStock.Enabled(ctx, cookieID, itemID)
+}
+
 // 确保适配器满足应用层定义的自动上架端口。
 var (
 	_ itemapp.AutoRelistRepository = (*AutoRelistRepository)(nil)

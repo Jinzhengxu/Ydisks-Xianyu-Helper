@@ -106,6 +106,8 @@ type itemCatalogServices struct {
 	stock *itemapp.ItemStockService
 	// autoRelist 提供售出后自动上架用例，由运行时付款事件回调使用，不暴露给 HTTP。
 	autoRelist *itemapp.AutoRelistService
+	// externalStock 提供按外部库存下架和重新上架原商品的用例。
+	externalStock *itemapp.ExternalStockService
 }
 
 // buildItemCatalogServices 构造商品目录和发布服务，并把平台会话恢复回调限制在组合根。
@@ -169,5 +171,10 @@ func buildItemCatalogServices(dependencies Dependencies, sessionRecovery adapter
 	if itemSinglePublishErr != nil {
 		return itemCatalogServices{}, fmt.Errorf("构造单商品发布服务失败: %w", itemSinglePublishErr)
 	}
-	return itemCatalogServices{catalog: itemCatalog, mutation: itemCatalogMutation, aiSettings: itemAISettings, categoryRecommendation: itemCategoryRecommendation, previewPersistence: itemBatchPreviewPersistence, singlePublish: itemSinglePublish, platformLifecycle: itemPlatformLifecycle, stock: itemStock, autoRelist: autoRelist}, nil
+	// externalStock 按商品配置读取外部库存，并复用发布端口下架或重新上架原商品。
+	externalStock, externalStockErr := itemapp.NewExternalStockService(dependencies.ItemDependencies.NewExternalStockRepository(), adapter.NewExternalStockFetcher(), itemPublishPort, dependencies.Logger)
+	if externalStockErr != nil {
+		return itemCatalogServices{}, fmt.Errorf("构造外部库存服务失败: %w", externalStockErr)
+	}
+	return itemCatalogServices{catalog: itemCatalog, mutation: itemCatalogMutation, aiSettings: itemAISettings, categoryRecommendation: itemCategoryRecommendation, previewPersistence: itemBatchPreviewPersistence, singlePublish: itemSinglePublish, platformLifecycle: itemPlatformLifecycle, stock: itemStock, autoRelist: autoRelist, externalStock: externalStock}, nil
 }

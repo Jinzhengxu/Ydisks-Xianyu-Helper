@@ -41,6 +41,16 @@ A single listing offers four modes: **free shipping**, **by distance**, **fixed 
 - Delete (the trash icon shown on hover on a card, or in the actions column in list mode) removes only the local record; it does not delete the product on Xianyu. A confirmation prompt appears; confirm that orders and rules will not be affected.
 - Use Link Delivery Rule/View Delivery Rules/N delivery rules to inspect the product rules. For specification products, verify every specification match.
 
+## External stock
+
+External Stock on a product card is opt-in per product. The assistant sends `GET` to an external JSON document and reads `available`, or `data.available` when the top-level field is absent. When the available count is 0 or below and the original listing is still on sale, it unpublishes that same listing. When the count is above 0 and the listing is off sale, it puts the same original item back on sale. It does not publish a new listing, and it never relists while the available count is 0. A product that enables this skips the account-level auto relist after sale.
+
+You can set the URL, header names (values are encrypted and are not shown again), JSON path, timeout (default 20 seconds, allowed 5 to 60), User-Agent (blank uses a desktop browser), cron (default `1 0 * * *`), timezone (default `Asia/Shanghai`), periodic minutes (default 30, 0 turns the period off), dry-run, and optional platform-stock sync capped by the configured maximum. A check runs after paid delivery succeeds, when the schedule is due, and when you click Check now. Dry-run still reads the external API and the current listing state, but it does not change the listing.
+
+If Xianyu returns `FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT`, the dialog keeps that status and stops relisting. Virtual goods and 鱼小铺 listings often cannot be edited on the web. Risk control, HTTP 5xx, or an unknown listing state also stops that product and backs off for 30 minutes. Each scheduler pass handles at most 3 opted-in products.
+
+The operations are `GET`/`PUT` `/api/v1/items/{cookie_id}/{item_id}/external-stock` and `POST` `/api/v1/items/{cookie_id}/{item_id}/external-stock/check`. Saving or checking needs `items:external-stock`; reading the config uses `items:read`. Responses do not include header values.
+
 ## Bulk listing
 
 See [Bulk Listing](Bulk-Listing). A bulk task runs preflight validation first; each row is marked publishable or needing correction. After start only publishable rows are published, and rows needing correction are not published, so fix the table and run preflight again. Its automatic-delivery columns reference card-group IDs from Card Inventory.

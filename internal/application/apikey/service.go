@@ -38,6 +38,8 @@ const (
 	ScopeItemsPublish = "items:publish"
 	// ScopeItemsUnpublish 允许对当前用户拥有的商品执行平台下架，不包含平台删除。
 	ScopeItemsUnpublish = "items:unpublish"
+	// ScopeItemsExternalStock 允许配置外部库存，并据此下架或重新上架原商品。
+	ScopeItemsExternalStock = "items:external-stock"
 	// ScopeOrdersRead 允许读取当前用户的订单信息。
 	ScopeOrdersRead = "orders:read"
 	// ScopeChatRead 允许读取聊天会话、消息和买家备注。
@@ -69,6 +71,7 @@ var supportedScopes = []string{
 	ScopeItemsRead,
 	ScopeItemsPublish,
 	ScopeItemsUnpublish,
+	ScopeItemsExternalStock,
 	ScopeOrdersRead,
 	ScopeChatRead,
 	ScopeChatSend,
